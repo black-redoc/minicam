@@ -8,6 +8,7 @@ dependencies = [
     "numpy==2.5.0",
     "onvif-zeep==0.2.12",
     "pydantic-settings==2.14.2",
+    "simplejpeg==1.9.0",
 ]
 
 [dependency-groups]
