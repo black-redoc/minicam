@@ -3,5 +3,49 @@ name = "camia"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
-    "fastapi[standard]>=0.138.1",
+    "av==17.1.0",
+    "fastapi[standard]==0.138.1",
+    "numpy==2.5.0",
+    "onvif-zeep==0.2.12",
+    "pydantic-settings==2.14.2",
 ]
+
+[dependency-groups]
+dev = [
+    "locust==2.44.4",
+    "mypy==2.1.0",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-benchmark==5.2.3",
+    "pytest-cov==7.1.0",
+    "pytest-mock==3.15.1",
+    "ruff==0.15.20",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "B", "UP", "ANN"]
+ignore = ["ANN101", "ANN102"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["av.*", "onvif.*", "zeep.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=app --cov-report=term-missing --cov-fail-under=95"
