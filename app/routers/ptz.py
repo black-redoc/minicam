@@ -9,6 +9,14 @@ from app import state
 router = APIRouter(prefix="/api/ptz", tags=["ptz"])
 
 _ALLOWED_ACTIONS: frozenset[str] = frozenset({"up", "down", "left", "right", "stop"})
+_CONNECTION_ERROR_KEYWORDS: frozenset[str] = frozenset(
+    {"Connection aborted", "Connection reset", "ConnectionReset", "ConnectionError", "RemoteDisconnected"}
+)
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return any(keyword in msg for keyword in _CONNECTION_ERROR_KEYWORDS)
 
 
 @router.post("/{action}")
@@ -35,6 +43,14 @@ async def ptz_command(action: str) -> dict[str, str]:
             await loop.run_in_executor(None, svc.connect)
         await loop.run_in_executor(None, getattr(svc, action))
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if _is_connection_error(exc):
+            try:
+                svc.disconnect()
+                await loop.run_in_executor(None, svc.connect)
+                await loop.run_in_executor(None, getattr(svc, action))
+            except Exception as retry_exc:
+                raise HTTPException(status_code=503, detail=str(retry_exc)) from retry_exc
+        else:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return {"action": action, "status": "ok"}

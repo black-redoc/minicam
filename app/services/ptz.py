@@ -43,17 +43,26 @@ class PTZService:
 
     def connect(self) -> None:
         """Establish ONVIF connection and retrieve the first media profile token."""
-        self._camera = ONVIFCamera(
+        logger.info("Connecting ONVIF PTZ to %s:%d", self._config.host, self._config.port)
+        camera = ONVIFCamera(
             self._config.host,
             self._config.port,
             self._config.user,
             self._config.password,
         )
-        self._ptz = self._camera.create_ptz_service()
-        media = self._camera.create_media_service()
+        logger.debug("Creating PTZ service")
+        ptz = camera.create_ptz_service()
+        logger.debug("Creating media service")
+        media = camera.create_media_service()
+        logger.debug("Fetching media profiles")
         profiles = media.GetProfiles()
-        self._profile_token = profiles[0].token
-        logger.info("ONVIF PTZ connected to %s:%d", self._config.host, self._config.port)
+        profile_token = profiles[0].token
+
+        # Only assign state once all steps succeed (atomic connect)
+        self._camera = camera
+        self._ptz = ptz
+        self._profile_token = profile_token
+        logger.info("ONVIF PTZ connected — profile token: %s", profile_token)
 
     def is_connected(self) -> bool:
         """Return True if ONVIF session is active."""
@@ -96,7 +105,6 @@ class PTZService:
         request.ProfileToken = self._profile_token
         request.Velocity = {
             "PanTilt": {"x": pan, "y": tilt},
-            "Zoom": {"x": 0.0},
         }
         self._ptz.ContinuousMove(request)
 

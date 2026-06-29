@@ -102,3 +102,39 @@ class TestPtzEndpointErrors:
         res = client.post("/api/ptz/up")
         assert res.status_code == 503
         assert "ONVIF timeout" in res.json()["detail"]
+
+    def test_reconnects_and_retries_on_connection_reset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        svc = MagicMock()
+        svc.is_connected.return_value = True
+        svc.up.side_effect = [
+            Exception("Unknown error: ('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))"),
+            None,
+        ]
+        monkeypatch.setattr(state_module, "ptz", svc)
+
+        test_app = FastAPI()
+        test_app.include_router(ptz_router.router)
+        client = TestClient(test_app)
+
+        res = client.post("/api/ptz/up")
+        assert res.status_code == 200
+        svc.disconnect.assert_called_once()
+        svc.connect.assert_called_once()
+        assert svc.up.call_count == 2
+
+    def test_returns_503_if_retry_also_fails_on_connection_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        svc = MagicMock()
+        svc.is_connected.return_value = True
+        svc.up.side_effect = Exception("Connection reset by peer")
+        monkeypatch.setattr(state_module, "ptz", svc)
+
+        test_app = FastAPI()
+        test_app.include_router(ptz_router.router)
+        client = TestClient(test_app)
+
+        res = client.post("/api/ptz/up")
+        assert res.status_code == 503
