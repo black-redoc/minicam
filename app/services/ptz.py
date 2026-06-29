@@ -55,6 +55,10 @@ class PTZService:
         self._profile_token = profiles[0].token
         logger.info("ONVIF PTZ connected to %s:%d", self._config.host, self._config.port)
 
+    def is_connected(self) -> bool:
+        """Return True if ONVIF session is active."""
+        return self._ptz is not None and self._profile_token is not None
+
     def disconnect(self) -> None:
         """Release ONVIF resources."""
         self._ptz = None
