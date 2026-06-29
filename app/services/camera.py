@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
 
 import av  # type: ignore[import-untyped]
+from av.codec.context import Flags
 
 from app.buffers.double_frame_buffer import DoubleFrameBuffer
 from app.services.decoder import decode_video_frame
@@ -14,6 +15,11 @@ logger = logging.getLogger(__name__)
 _RTSP_OPTIONS: dict[str, str] = {
     "rtsp_transport": "tcp",
     "stimeout": "5000000",  # 5 second connection timeout in microseconds
+    "fflags": "nobuffer",
+    "analyzeduration": "0",
+    "probesize": "32768",
+    "max_delay": "0",
+    "reorder_queue_size": "0",
 }
 _RECONNECT_DELAY_SECONDS = 2.0
 _STOP_TIMEOUT_SECONDS = 10.0
@@ -37,19 +43,19 @@ class RTSPCamera:
         self._connected = False
         self._sequence = 0
         self._container: av.container.InputContainer | None = None
-        self._executor: ThreadPoolExecutor | None = None
-        self._future: Future[None] | None = None
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         """Start the RTSP capture loop in a background thread."""
         if self._running:
             return
         self._running = True
-        self._executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="rtsp_camera",
+        self._thread = threading.Thread(
+            target=self._capture_loop,
+            name="rtsp_camera",
+            daemon=True,
         )
-        self._future = self._executor.submit(self._capture_loop)
+        self._thread.start()
 
     def stop(self) -> None:
         """Stop the capture loop and release all resources."""
@@ -62,15 +68,14 @@ class RTSPCamera:
             except Exception:
                 pass
 
-        if self._future is not None:
-            try:
-                self._future.result(timeout=_STOP_TIMEOUT_SECONDS)
-            except Exception as exc:
-                logger.warning("Error waiting for capture thread: %s", exc)
-
-        if self._executor is not None:
-            self._executor.shutdown(wait=True)
-            self._executor = None
+        if self._thread is not None:
+            self._thread.join(timeout=_STOP_TIMEOUT_SECONDS)
+            if self._thread.is_alive():
+                logger.warning(
+                    "Capture thread did not stop within %.1f seconds",
+                    _STOP_TIMEOUT_SECONDS,
+                )
+            self._thread = None
 
         self._connected = False
 
@@ -100,7 +105,7 @@ class RTSPCamera:
             video_stream = next(
                 s for s in self._container.streams if s.type == "video"
             )
-            video_stream.codec_context.low_delay = 1
+            video_stream.codec_context.flags |= Flags.low_delay
             self._connected = True
             logger.info("RTSP stream opened: %s", self._rtsp_url)
 

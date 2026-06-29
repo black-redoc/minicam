@@ -2,6 +2,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+from av.codec.context import Flags
 
 from app.buffers.double_frame_buffer import DoubleFrameBuffer
 from app.services.camera import RTSPCamera
@@ -98,11 +99,11 @@ class TestRTSPCameraEdgeCases:
         cam._container = mock_container
         cam.stop()  # should not raise
 
-    def test_stop_handles_future_exception(self) -> None:
+    def test_stop_logs_warning_when_thread_does_not_stop(self) -> None:
         cam, _ = _make_camera()
-        mock_future = MagicMock()
-        mock_future.result.side_effect = RuntimeError("future error")
-        cam._future = mock_future
+        mock_thread = MagicMock(spec=["join", "is_alive"])
+        mock_thread.is_alive.return_value = True
+        cam._thread = mock_thread
         cam.stop()  # should not raise
 
     def test_capture_stream_finally_handles_container_close_exception(self) -> None:
@@ -116,3 +117,38 @@ class TestRTSPCameraEdgeCases:
 
         with patch("app.services.camera.av.open", return_value=mock_container):
             cam._capture_stream()  # should not raise even if close() fails
+
+    def test_capture_stream_applies_low_delay_flag(self) -> None:
+        cam, _ = _make_camera()
+        cam._running = True
+
+        mock_video_stream = MagicMock()
+        mock_video_stream.type = "video"
+        mock_video_stream.codec_context = MagicMock()
+        original_flags = mock_video_stream.codec_context.flags
+
+        mock_container = MagicMock()
+        mock_container.streams = [mock_video_stream]
+        mock_container.demux.return_value = []
+
+        with patch("app.services.camera.av.open", return_value=mock_container):
+            cam._capture_stream()
+
+        original_flags.__ior__.assert_called_once_with(Flags.low_delay)
+
+
+class TestRTSPOptions:
+    def test_low_latency_options_present(self) -> None:
+        from app.services.camera import _RTSP_OPTIONS
+        assert _RTSP_OPTIONS["analyzeduration"] == "0"
+        assert _RTSP_OPTIONS["probesize"] == "32768"
+        assert _RTSP_OPTIONS["max_delay"] == "0"
+        assert _RTSP_OPTIONS["reorder_queue_size"] == "0"
+
+    def test_tcp_transport_present(self) -> None:
+        from app.services.camera import _RTSP_OPTIONS
+        assert _RTSP_OPTIONS["rtsp_transport"] == "tcp"
+
+    def test_nobuffer_present(self) -> None:
+        from app.services.camera import _RTSP_OPTIONS
+        assert _RTSP_OPTIONS["fflags"] == "nobuffer"
