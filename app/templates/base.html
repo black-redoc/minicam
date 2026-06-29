@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-slate-900">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <title>{% block title %}minicam{% endblock %}</title>
+
+    <!-- Tailwind CDN — no build step required -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+                    },
+                },
+            },
+        };
+    </script>
+
+    <!-- Project component styles -->
+    <link rel="stylesheet" href="{{ url_for('static', path='css/main.css') }}">
+
+    {% block head %}{% endblock %}
+</head>
+<body class="min-h-screen bg-slate-900 text-slate-100 antialiased">
+
+    {% block content %}{% endblock %}
+
+    {% block scripts %}{% endblock %}
+
+</body>
+</html>
