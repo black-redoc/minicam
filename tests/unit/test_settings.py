@@ -44,9 +44,8 @@ class TestSettingsDefaults:
         s = _make_settings()
         assert s.app_port == 8080
 
-    def test_default_debug_is_false(self) -> None:
-        s = _make_settings()
-        assert s.debug is False
+    def test_debug_field_default_is_false(self) -> None:
+        assert Settings.model_fields["debug"].default is False
 
 
 class TestGetSettings:
