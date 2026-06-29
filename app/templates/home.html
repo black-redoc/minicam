@@ -24,6 +24,20 @@
         <span id="status-badge" class="badge badge--connecting">
             <span data-label>Connecting…</span>
         </span>
+        <button id="config-btn"
+                type="button"
+                aria-label="Open camera settings"
+                class="flex items-center justify-center w-8 h-8 rounded-lg
+                       text-slate-400 hover:text-slate-100 hover:bg-slate-800
+                       transition-colors focus:outline-none focus:ring-2
+                       focus:ring-sky-500 focus:ring-offset-1 focus:ring-offset-slate-900">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" class="w-4 h-4 pointer-events-none">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+        </button>
     </div>
 
 </header>
@@ -160,12 +174,202 @@
 
 </main>
 
+<!-- ═══════════════════════════════════════════════════════════
+     Config Modal
+     ═══════════════════════════════════════════════════════════ -->
+<div id="config-modal"
+     aria-hidden="true"
+     class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+
+    <div role="dialog"
+         aria-modal="true"
+         aria-labelledby="config-modal-title"
+         class="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl
+                w-full max-w-md max-h-[90vh] flex flex-col">
+
+        <!-- Modal header -->
+        <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700 shrink-0">
+            <h2 id="config-modal-title"
+                class="text-sm font-semibold text-slate-100 tracking-tight">
+                Camera Settings
+            </h2>
+            <button type="button"
+                    data-close-btn
+                    aria-label="Close settings"
+                    class="flex items-center justify-center w-7 h-7 rounded-md
+                           text-slate-400 hover:text-slate-100 hover:bg-slate-700
+                           transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" class="w-4 h-4 pointer-events-none">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Modal body (scrollable) -->
+        <div class="overflow-y-auto flex-1 px-5 py-4">
+
+            <!-- Inline error banner -->
+            <p data-config-error
+               role="alert"
+               class="hidden text-xs text-red-400 bg-red-950/40 border border-red-900/60
+                      rounded-md px-3 py-2 mb-4"></p>
+
+            <form data-config-form novalidate class="space-y-4">
+
+                <!-- Host / IP + discover trigger -->
+                <div class="flex flex-col gap-1.5">
+                    <label for="cfg-host"
+                           class="text-xs text-slate-400 font-medium">Host / IP</label>
+                    <div class="flex gap-2">
+                        <input id="cfg-host"
+                               name="camera_host"
+                               type="text"
+                               class="input-cfg flex-1 min-w-0"
+                               placeholder="192.168.1.x"
+                               autocomplete="off"
+                               spellcheck="false">
+                        <button type="button"
+                                data-discover-btn
+                                class="shrink-0 text-xs px-3 py-1.5 rounded-lg
+                                       border border-slate-600 text-slate-300
+                                       hover:text-slate-100 hover:border-slate-500
+                                       transition-colors focus:outline-none focus:ring-2
+                                       focus:ring-sky-500 disabled:opacity-50
+                                       disabled:cursor-not-allowed">
+                            Search
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Discovery results — hidden until Search is clicked -->
+                <div data-discover-section
+                     class="hidden rounded-lg bg-slate-900/60 border border-slate-700 px-3 py-2">
+                    <p class="text-xs text-slate-500 mb-2 font-medium uppercase tracking-wide">
+                        Found on network
+                    </p>
+                    <div data-discover-busy class="hidden">
+                        <div class="flex items-center gap-2 py-1 text-xs text-slate-400">
+                            <span class="w-3.5 h-3.5 border-2 border-slate-600 border-t-sky-400
+                                         rounded-full animate-spin shrink-0 block"></span>
+                            <span>Searching for cameras on the network…</span>
+                        </div>
+                    </div>
+                    <div data-discover-list aria-live="polite"></div>
+                </div>
+
+                <!-- RTSP Port -->
+                <div class="flex flex-col gap-1.5">
+                    <label for="cfg-rtsp-port"
+                           class="text-xs text-slate-400 font-medium">RTSP Port</label>
+                    <input id="cfg-rtsp-port"
+                           name="camera_rtsp_port"
+                           type="number"
+                           class="input-cfg"
+                           min="1"
+                           max="65535"
+                           placeholder="554">
+                </div>
+
+                <!-- Username -->
+                <div class="flex flex-col gap-1.5">
+                    <label for="cfg-user"
+                           class="text-xs text-slate-400 font-medium">Username</label>
+                    <input id="cfg-user"
+                           name="camera_user"
+                           type="text"
+                           class="input-cfg"
+                           autocomplete="username">
+                </div>
+
+                <!-- Password — never prefilled; blank preserves existing value -->
+                <div class="flex flex-col gap-1.5">
+                    <label for="cfg-password"
+                           class="text-xs text-slate-400 font-medium">Password</label>
+                    <input id="cfg-password"
+                           name="camera_password"
+                           type="password"
+                           class="input-cfg"
+                           autocomplete="current-password"
+                           placeholder="Leave blank to keep current password">
+                    <p class="text-xs text-slate-600 leading-snug">
+                        Leave blank to keep the existing password.
+                    </p>
+                </div>
+
+                <!-- Channel -->
+                <div class="flex flex-col gap-1.5">
+                    <label for="cfg-channel"
+                           class="text-xs text-slate-400 font-medium">Channel</label>
+                    <input id="cfg-channel"
+                           name="camera_channel"
+                           type="number"
+                           class="input-cfg"
+                           min="1"
+                           placeholder="1">
+                </div>
+
+                <!-- Stream quality -->
+                <div class="flex flex-col gap-1.5">
+                    <label for="cfg-stream"
+                           class="text-xs text-slate-400 font-medium">Stream</label>
+                    <select id="cfg-stream"
+                            name="camera_stream"
+                            class="input-cfg">
+                        <option value="main">Main</option>
+                        <option value="sub">Sub</option>
+                    </select>
+                </div>
+
+                <!-- ONVIF Port -->
+                <div class="flex flex-col gap-1.5">
+                    <label for="cfg-onvif-port"
+                           class="text-xs text-slate-400 font-medium">ONVIF Port</label>
+                    <input id="cfg-onvif-port"
+                           name="camera_onvif_port"
+                           type="number"
+                           class="input-cfg"
+                           min="1"
+                           max="65535"
+                           placeholder="8000">
+                </div>
+
+            </form>
+        </div>
+
+        <!-- Modal footer -->
+        <div class="flex items-center justify-end gap-2 px-5 py-4
+                    border-t border-slate-700 shrink-0">
+            <button type="button"
+                    data-cancel-btn
+                    class="text-xs px-4 py-2 rounded-lg text-slate-400
+                           hover:text-slate-100 transition-colors
+                           focus:outline-none focus:ring-2 focus:ring-sky-500">
+                Cancel
+            </button>
+            <button type="button"
+                    data-save-btn
+                    class="text-xs px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500
+                           text-white font-medium transition-colors
+                           focus:outline-none focus:ring-2 focus:ring-sky-500
+                           focus:ring-offset-2 focus:ring-offset-slate-800
+                           disabled:opacity-50 disabled:cursor-not-allowed">
+                Save
+            </button>
+        </div>
+
+    </div>
+</div>
+
 {% endblock %}
 
 
 {% block scripts %}
 <script src="{{ url_for('static', path='js/stream.js') }}"></script>
 <script src="{{ url_for('static', path='js/ptz.js') }}"></script>
+<script src="{{ url_for('static', path='js/config.js') }}"></script>
 <script>
     // ── Video Stream ────────────────────────────────────────
     const stream = new VideoStream({
@@ -195,5 +399,9 @@
 
     // ── PTZ Controls ────────────────────────────────────────
     initPtz(document.getElementById('ptz-controls'));
+
+    // ── Config Widget ────────────────────────────────────────
+    const configWidget = new ConfigWidget('config-modal');
+    document.getElementById('config-btn').addEventListener('click', () => configWidget.open());
 </script>
 {% endblock %}

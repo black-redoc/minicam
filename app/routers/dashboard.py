@@ -15,5 +15,5 @@ async def home(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="home.html",
-        context={"camera_host": settings.camera_host},
+        context={"camera_host": settings.camera_host or ""},
     )

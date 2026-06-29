@@ -13,10 +13,10 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    camera_host: str
+    camera_host: str | None = None
     camera_rtsp_port: int = 554
     camera_user: str = "admin"
-    camera_password: str
+    camera_password: str | None = None
     camera_channel: int = 1
     camera_stream: str = "main"
     camera_onvif_port: int = 8000
@@ -27,8 +27,10 @@ class Settings(BaseSettings):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def rtsp_url(self) -> str:
-        """Build IPCAM-compatible RTSP URL from individual fields."""
+    def rtsp_url(self) -> str | None:
+        """Build IPCAM-compatible RTSP URL, or None when host/password absent."""
+        if self.camera_host is None or self.camera_password is None:
+            return None
         return (
             f"rtsp://{self.camera_user}:{self.camera_password}"
             f"@{self.camera_host}:{self.camera_rtsp_port}"
