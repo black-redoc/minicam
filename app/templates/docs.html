@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}{{ current_title }} — minicam docs{% endblock %}
+
+{% block head %}
+<style>
+  /* ── Markdown prose ─────────────────────────────────────── */
+  .docs-content h1 { font-size:1.4rem; font-weight:700; color:#f1f5f9; margin:1.5rem 0 0.75rem; }
+  .docs-content h2 { font-size:1.1rem; font-weight:600; color:#e2e8f0; margin:1.5rem 0 0.5rem;
+                     padding-bottom:0.35rem; border-bottom:1px solid #334155; }
+  .docs-content h3 { font-size:0.95rem; font-weight:600; color:#cbd5e1; margin:1.25rem 0 0.4rem; }
+  .docs-content p  { color:#94a3b8; line-height:1.75; margin:0.65rem 0; }
+  .docs-content a  { color:#38bdf8; text-decoration:underline; }
+  .docs-content ul { list-style:disc; padding-left:1.4rem; color:#94a3b8; line-height:1.8; }
+  .docs-content ol { list-style:decimal; padding-left:1.4rem; color:#94a3b8; line-height:1.8; }
+  .docs-content li { margin:0.15rem 0; }
+
+  /* code inline */
+  .docs-content code {
+    background:#1e293b; border:1px solid #334155; border-radius:0.25rem;
+    padding:0.1rem 0.35rem; font-family:monospace; font-size:0.82rem; color:#7dd3fc;
+    /* prevent long identifiers from breaking layout */
+    overflow-wrap: break-word; word-break: break-all;
+  }
+
+  /* code block */
+  .docs-content pre {
+    background:#1e293b; border:1px solid #334155; border-radius:0.5rem;
+    padding:1rem; overflow-x:auto; -webkit-overflow-scrolling:touch;
+    margin:1rem 0;
+  }
+  .docs-content pre code {
+    background:none; border:none; padding:0; color:#e2e8f0;
+    overflow-wrap: normal; word-break: normal;
+  }
+
+  /* table — display:block + overflow-x:auto keeps horizontal scroll
+     contained to the table itself instead of bleeding to the page */
+  .docs-content table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.82rem;
+    width: max-content;
+    max-width: 100%;
+  }
+  .docs-content th {
+    background:#1e293b; color:#e2e8f0; padding:0.45rem 0.7rem;
+    text-align:left; border:1px solid #334155; white-space: nowrap;
+  }
+  .docs-content td {
+    color:#94a3b8; padding:0.4rem 0.7rem; border:1px solid #334155;
+  }
+  .docs-content tr:nth-child(even) td { background:#1e293b40; }
+
+  .docs-content blockquote {
+    border-left:3px solid #0ea5e9; padding-left:1rem;
+    color:#64748b; margin:1rem 0; font-style:italic;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="min-h-screen bg-slate-900">
+
+  <!-- ── Header ────────────────────────────────────────────── -->
+  <header class="sticky top-0 z-20 flex items-center h-14 px-4 md:px-6 gap-3
+                 bg-slate-900/90 backdrop-blur border-b border-slate-800">
+
+    <!-- Breadcrumb (left, truncates on mobile) -->
+    <div class="flex items-center gap-1.5 min-w-0 flex-1">
+      <span class="w-2 h-2 rounded-full bg-sky-400 shadow-[0_0_6px_#38bdf8] shrink-0"></span>
+      <a href="/" class="text-sky-400 font-bold tracking-tight text-base shrink-0">minicam</a>
+      <span class="text-slate-700 shrink-0">/</span>
+      <a href="/doc/"
+         class="hidden sm:inline text-slate-500 text-sm hover:text-slate-200 transition-colors shrink-0">
+        docs
+      </a>
+      <span class="hidden sm:inline text-slate-700 shrink-0">/</span>
+      <span class="text-slate-300 text-sm truncate">{{ current_title }}</span>
+    </div>
+
+    <!-- Dashboard link (right, icon-only on xs) -->
+    <a href="/"
+       class="shrink-0 flex items-center gap-1 text-xs text-slate-500
+              hover:text-slate-300 transition-colors">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 18l-6-6 6-6"/>
+      </svg>
+      <span class="hidden sm:inline">Dashboard</span>
+    </a>
+  </header>
+
+  <!-- ── Mobile topic picker (select dropdown) ─────────────── -->
+  <div class="md:hidden px-4 py-2 border-b border-slate-800 bg-slate-900/80">
+    <select onchange="location.href=this.value"
+            class="w-full bg-slate-800 border border-slate-700 rounded-md
+                   text-sm text-slate-300 px-3 py-1.5
+                   focus:outline-none focus:ring-2 focus:ring-sky-500">
+      {% for topic in topics %}
+      <option value="/doc/{{ topic.slug }}"
+              {% if topic.slug == current_slug %}selected{% endif %}>
+        {{ topic.title }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- ── Two-column layout ─────────────────────────────────── -->
+  <div class="flex max-w-6xl mx-auto">
+
+    <!-- Sidebar (desktop only) -->
+    <nav class="hidden md:block w-52 shrink-0 sticky top-14 h-[calc(100vh-3.5rem)]
+                overflow-y-auto border-r border-slate-800 py-6 px-3">
+      <p class="text-[0.65rem] text-slate-600 uppercase tracking-widest font-semibold px-2 mb-3">
+        Topics
+      </p>
+      <ul class="space-y-0.5">
+        {% for topic in topics %}
+        <li>
+          <a href="/doc/{{ topic.slug }}"
+             class="block px-2 py-1.5 rounded-md text-sm transition-colors
+                    {% if topic.slug == current_slug %}
+                    bg-sky-600/15 text-sky-400 font-medium
+                    {% else %}
+                    text-slate-400 hover:text-slate-200 hover:bg-slate-800
+                    {% endif %}">
+            {{ topic.title }}
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </nav>
+
+    <!-- Content -->
+    <main class="flex-1 min-w-0 px-4 md:px-8 py-6 md:py-8">
+      <h1 class="text-lg md:text-xl font-bold text-slate-100 mb-5">{{ current_title }}</h1>
+      <div class="docs-content">
+        {{ content | safe }}
+      </div>
+    </main>
+
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}minicam — Documentation{% endblock %}
+
+{% block content %}
+<div class="min-h-screen bg-slate-900">
+
+  <!-- ── Header ────────────────────────────────────────────── -->
+  <header class="sticky top-0 z-20 flex items-center h-14 px-4 md:px-6 gap-3
+                 bg-slate-900/90 backdrop-blur border-b border-slate-800">
+
+    <div class="flex items-center gap-1.5 min-w-0 flex-1">
+      <span class="w-2 h-2 rounded-full bg-sky-400 shadow-[0_0_6px_#38bdf8] shrink-0"></span>
+      <a href="/" class="text-sky-400 font-bold tracking-tight text-base shrink-0">minicam</a>
+      <span class="text-slate-700 shrink-0">/</span>
+      <span class="text-slate-400 text-sm truncate">docs</span>
+    </div>
+
+    <a href="/"
+       class="shrink-0 flex items-center gap-1 text-xs text-slate-500
+              hover:text-slate-300 transition-colors">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 18l-6-6 6-6"/>
+      </svg>
+      <span class="hidden sm:inline">Dashboard</span>
+    </a>
+  </header>
+
+  <!-- ── Topic grid ────────────────────────────────────────── -->
+  <main class="max-w-4xl mx-auto px-4 py-8 md:py-10">
+    <h1 class="text-xl md:text-2xl font-bold text-slate-100 mb-1">Documentation</h1>
+    <p class="text-slate-400 text-sm mb-6">minicam — IP Camera Dashboard reference</p>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {% for topic in topics %}
+      <a href="/doc/{{ topic.slug }}"
+         class="card hover:border-sky-600 hover:bg-slate-700/50 transition-colors group">
+        <h2 class="text-sm font-semibold text-slate-100 group-hover:text-sky-400 transition-colors">
+          {{ topic.title }}
+        </h2>
+      </a>
+      {% endfor %}
+    </div>
+  </main>
+
+</div>
+{% endblock %}
