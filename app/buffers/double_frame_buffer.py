@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+import logging
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from app.models.frame import Frame
+
+logger = logging.getLogger(__name__)
 
 
 class DoubleFrameBuffer:
@@ -30,7 +33,8 @@ class DoubleFrameBuffer:
         Args:
             frame: The decoded frame to store.
         """
-        self._executor.submit(self._swap, frame)
+        future = self._executor.submit(self._swap, frame)
+        future.add_done_callback(self._log_if_failed)
 
     def read(self) -> Frame | None:
         """Return the latest available frame, or None if none written yet."""
@@ -43,3 +47,10 @@ class DoubleFrameBuffer:
     def _swap(self, frame: Frame) -> None:
         self._write = frame
         self._read, self._write = self._write, self._read
+
+    def _log_if_failed(self, future: Future[None]) -> None:
+        if future.cancelled():
+            return
+        exc = future.exception()
+        if exc is not None:
+            logger.error("Frame buffer swap failed", exc_info=exc)

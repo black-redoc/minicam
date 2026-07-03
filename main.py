@@ -16,7 +16,12 @@ from app.services.camera import RTSPCamera
 from app.services.ptz import PTZConfig, PTZService
 from app.settings import get_config
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)-9s %(asctime)s.%(msecs)03d %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    force=True,  # uvicorn's own dictConfig runs before this and would win otherwise
+)
 logger = logging.getLogger(__name__)
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -8,6 +9,7 @@ from app import state
 from app.services.encoder import encode_jpeg
 
 router = APIRouter(tags=["stream"])
+logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 1 / 60
 
@@ -23,10 +25,14 @@ async def stream(websocket: WebSocket, camera_name: str) -> None:
     """
     buf = state.frame_buffers.get(camera_name)
     if buf is None:
+        logger.warning("Stream rejected — unknown camera: %s", camera_name)
         await websocket.close(code=1008)
         return
 
     await websocket.accept()
+    logger.info(
+        "Stream client connected: camera=%s client=%s", camera_name, websocket.client
+    )
     loop = asyncio.get_running_loop()
     last_sequence = -1
 
@@ -41,5 +47,10 @@ async def stream(websocket: WebSocket, camera_name: str) -> None:
 
             await asyncio.sleep(_POLL_INTERVAL)
 
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        logger.info(
+            "Stream client disconnected: camera=%s code=%s", camera_name, exc.code
+        )
+    except Exception:
+        logger.exception("Stream error: camera=%s", camera_name)
+        raise
