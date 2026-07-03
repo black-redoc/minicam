@@ -19,22 +19,26 @@ def _is_connection_error(exc: Exception) -> bool:
     return any(keyword in msg for keyword in _CONNECTION_ERROR_KEYWORDS)
 
 
-@router.post("/{action}")
-async def ptz_command(action: str) -> dict[str, str]:
-    """Send a PTZ command to the camera.
+@router.post("/{camera_name}/{action}")
+async def ptz_command(camera_name: str, action: str) -> dict[str, str]:
+    """Send a PTZ command to the named camera.
 
     Lazily connects to ONVIF on the first call.
     Blocking ONVIF calls are off-loaded to a thread-pool executor.
 
     Args:
+        camera_name: Key used to look up the PTZ service in the registry.
         action: One of up | down | left | right | stop.
     """
     if action not in _ALLOWED_ACTIONS:
         raise HTTPException(status_code=400, detail=f"Unknown PTZ action: '{action}'")
 
-    svc = state.ptz
+    svc = state.ptz_services.get(camera_name)
     if svc is None:
-        raise HTTPException(status_code=503, detail="PTZ service not initialized")
+        raise HTTPException(
+            status_code=503,
+            detail=f"PTZ service not found for camera '{camera_name}'",
+        )
 
     loop = asyncio.get_running_loop()
 

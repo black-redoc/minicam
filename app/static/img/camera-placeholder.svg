@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <!-- Background matching app surface color -->
+  <rect width="1280" height="720" fill="#0f172a"/>
+
+  <!-- Subtle scanline grid -->
+  <defs>
+    <pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M 80 0 L 0 0 0 80" fill="none" stroke="#1e293b" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1280" height="720" fill="url(#grid)" opacity="0.4"/>
+
+  <!-- Camera body -->
+  <rect x="555" y="286" width="170" height="120" rx="14" fill="none" stroke="#334155" stroke-width="6"/>
+
+  <!-- Viewfinder notch -->
+  <path d="M596 286 L612 258 L668 258 L684 286" fill="none" stroke="#334155" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+
+  <!-- Lens ring outer -->
+  <circle cx="640" cy="346" r="44" fill="none" stroke="#334155" stroke-width="6"/>
+
+  <!-- Lens ring inner -->
+  <circle cx="640" cy="346" r="26" fill="#1e293b" stroke="#334155" stroke-width="4"/>
+
+  <!-- Lens reflection dot -->
+  <circle cx="628" cy="334" r="6" fill="#0ea5e9" opacity="0.25"/>
+
+  <!-- Record dot (top-right of camera body) -->
+  <circle cx="704" cy="302" r="7" fill="#334155"/>
+
+  <!-- "No signal" label -->
+  <text x="640" y="448"
+        font-family="ui-monospace, 'JetBrains Mono', monospace"
+        font-size="18"
+        fill="#334155"
+        text-anchor="middle"
+        letter-spacing="4">NO SIGNAL</text>
+</svg>

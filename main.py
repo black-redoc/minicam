@@ -6,13 +6,15 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app import state
+from app.buffers.double_frame_buffer import DoubleFrameBuffer
 from app.routers import dashboard
 from app.routers import ptz as ptz_router
+from app.routers import docs as docs_router
 from app.routers import setup as setup_router
 from app.routers import stream as stream_router
 from app.services.camera import RTSPCamera
 from app.services.ptz import PTZConfig, PTZService
-from app.settings import get_settings
+from app.settings import get_config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,32 +22,35 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    settings = get_settings()
+    config = get_config()
 
-    if settings.camera_host is not None and settings.rtsp_url is not None:
-        state.camera = RTSPCamera(
-            rtsp_url=settings.rtsp_url,
-            buffer=state.frame_buffer,
-        )
-        state.camera.start()
-        logger.info("RTSP camera started — host: %s", settings.camera_host)
+    for cam in config.cameras:
+        buf = DoubleFrameBuffer()
+        state.frame_buffers[cam.name] = buf
 
-        state.ptz = PTZService(
+        camera = RTSPCamera(rtsp_url=cam.rtsp_url, buffer=buf)
+        camera.start()
+        state.cameras[cam.name] = camera
+
+        state.ptz_services[cam.name] = PTZService(
             PTZConfig(
-                host=settings.camera_host,
-                port=settings.camera_onvif_port,
-                user=settings.camera_user,
-                password=settings.camera_password or "",
+                host=cam.host,
+                port=cam.onvif_port,
+                user=cam.user,
+                password=cam.password,
             )
         )
+        logger.info("RTSP camera started — name: %s host: %s", cam.name, cam.host)
 
     yield
 
-    if state.camera:
-        state.camera.stop()
-    state.frame_buffer.shutdown()
-    if state.ptz and state.ptz.is_connected():
-        state.ptz.disconnect()
+    for name, camera in state.cameras.items():
+        camera.stop()
+    for buf in state.frame_buffers.values():
+        buf.shutdown()
+    for name, ptz in state.ptz_services.items():
+        if ptz.is_connected():
+            ptz.disconnect()
     logger.info("Services shut down")
 
 
@@ -62,15 +67,15 @@ app.include_router(dashboard.router)
 app.include_router(stream_router.router)
 app.include_router(ptz_router.router)
 app.include_router(setup_router.router)
+app.include_router(docs_router.router)
 
 
 @app.get("/health")
-def health() -> dict[str, str | bool]:
+def health() -> dict[str, str | int | bool]:
     """JSON health status."""
-    settings = get_settings()
+    config = get_config()
     return {
         "status": "ok",
-        "camera_host": settings.camera_host or "",
-        "camera_connected": state.camera.is_connected() if state.camera else False,
-        "debug": settings.debug,
+        "cameras": len(config.cameras),
+        "debug": config.debug,
     }

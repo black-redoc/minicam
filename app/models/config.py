@@ -1,34 +1,63 @@
-"""Pydantic models for the config and setup API endpoints."""
+"""Pydantic models for application and camera configuration."""
 
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
-class ConfigResponse(BaseModel):
-    """Read-only view of camera configuration. Password is always redacted."""
+class CameraConfig(BaseModel):
+    name: str
+    host: str
+    rtsp_port: int = 554
+    onvif_port: int = 80
+    user: str = "admin"
+    password: str = ""
+    channel: int = 1
+    stream: Literal["main", "sub"] = "main"
 
-    camera_host: str
-    camera_rtsp_port: int
-    camera_user: str
-    camera_password: str  # always "" in responses — never expose the real value
-    camera_channel: int
-    camera_stream: Literal["main", "sub"]
-    camera_onvif_port: int
+    @computed_field
+    @property
+    def rtsp_url(self) -> str:
+        return (
+            f"rtsp://{self.user}:{self.password}"
+            f"@{self.host}:{self.rtsp_port}"
+            f"/h264/ch{self.channel}/{self.stream}/av_stream"
+        )
 
 
-class ConfigRequest(BaseModel):
-    """Writable camera configuration. Empty password means "keep existing"."""
+class AppConfig(BaseModel):
+    host: str = "0.0.0.0"
+    port: int = 8080
+    debug: bool = False
+    cameras: list[CameraConfig] = Field(default_factory=list)
 
-    camera_host: str = Field(..., min_length=1)
-    camera_rtsp_port: int = Field(..., ge=1, le=65535)
-    camera_user: str
-    camera_password: str  # empty string → do not overwrite stored password
-    camera_channel: int
-    camera_stream: Literal["main", "sub"]
-    camera_onvif_port: int = Field(..., ge=1, le=65535)
+
+class CameraConfigResponse(BaseModel):
+    """Read-only view — password always redacted."""
+
+    name: str
+    host: str
+    rtsp_port: int
+    onvif_port: int
+    user: str
+    password: str
+    channel: int
+    stream: Literal["main", "sub"]
+
+
+class CameraConfigRequest(BaseModel):
+    """Writable config. Empty password = keep existing."""
+
+    name: str = Field(..., min_length=1)
+    host: str = Field(..., min_length=1)
+    rtsp_port: int = Field(554, ge=1, le=65535)
+    onvif_port: int = Field(80, ge=1, le=65535)
+    user: str = "admin"
+    password: str = ""
+    channel: int = Field(1, ge=1)
+    stream: Literal["main", "sub"] = "main"
 
 
 class DiscoveredCamera(BaseModel):

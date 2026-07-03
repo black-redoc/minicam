@@ -8,13 +8,18 @@
 const PTZ_DIRECTIONS = ['up', 'down', 'left', 'right'];
 
 /**
- * Send a single PTZ action to the backend.
- * @param {string} action  - One of: up | down | left | right | stop
+ * Send a single PTZ action to the backend for a specific camera.
+ *
+ * @param {string} action      - One of: up | down | left | right | stop
+ * @param {string} cameraName  - Target camera name.
  * @returns {Promise<void>}
  */
-async function sendPtz(action) {
+async function sendPtz(action, cameraName) {
     try {
-        const res = await fetch(`/api/ptz/${action}`, { method: 'POST' });
+        const res = await fetch(
+            `/api/ptz/${encodeURIComponent(cameraName)}/${action}`,
+            { method: 'POST' }
+        );
         if (!res.ok) console.warn(`PTZ "${action}" responded ${res.status}`);
     } catch (err) {
         console.error(`PTZ "${action}" failed:`, err);
@@ -22,14 +27,18 @@ async function sendPtz(action) {
 }
 
 /**
- * Bind PTZ buttons inside a container element.
+ * Bind PTZ buttons inside a container element and return a control handle.
  *
  * Expects buttons with [data-ptz="<action>"] attributes.
  * Direction buttons auto-send "stop" on release.
  *
  * @param {HTMLElement} container
+ * @param {string}      cameraName  - Initial camera name for PTZ requests.
+ * @returns {{ setCameraName: (name: string) => void }}
  */
-function initPtz(container) {
+function initPtz(container, cameraName) {
+    let currentCameraName = cameraName;
+
     for (const action of PTZ_DIRECTIONS) {
         const btn = container.querySelector(`[data-ptz="${action}"]`);
         if (!btn) continue;
@@ -38,15 +47,15 @@ function initPtz(container) {
             e.preventDefault();
             btn.setPointerCapture(e.pointerId);
             btn.setAttribute('aria-pressed', 'true');
-            sendPtz(action);
+            sendPtz(action, currentCameraName);
         });
 
         const release = () => {
             btn.removeAttribute('aria-pressed');
-            sendPtz('stop');
+            sendPtz('stop', currentCameraName);
         };
 
-        btn.addEventListener('pointerup',    release);
+        btn.addEventListener('pointerup',     release);
         btn.addEventListener('pointercancel', release);
     }
 
@@ -54,7 +63,13 @@ function initPtz(container) {
     if (stopBtn) {
         stopBtn.addEventListener('pointerdown', (e) => {
             e.preventDefault();
-            sendPtz('stop');
+            sendPtz('stop', currentCameraName);
         });
     }
+
+    return {
+        setCameraName(name) {
+            currentCameraName = name;
+        },
+    };
 }

@@ -1,16 +1,16 @@
 [project]
 name = "camia"
 version = "0.1.0"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "av==17.1.0",
     "fastapi[standard]==0.138.1",
     "numpy==2.5.0",
     "onvif-zeep==0.2.12",
-    "pydantic-settings==2.14.2",
-    "python-dotenv==1.1.1",
     "simplejpeg==1.9.0",
+    "tomli-w==1.1.0",
     "wsdiscovery==2.1.2",
+    "markdown==3.7",
 ]
 
 [dependency-groups]
@@ -27,7 +27,7 @@ dev = [
 
 [tool.ruff]
 line-length = 88
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "B", "UP", "ANN"]
@@ -41,7 +41,7 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 
 [[tool.mypy.overrides]]

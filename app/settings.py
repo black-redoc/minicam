@@ -1,44 +1,24 @@
+"""Load application configuration from config.toml."""
+
+from __future__ import annotations
+
+import tomllib
 from functools import lru_cache
+from pathlib import Path
 
-from pydantic import computed_field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.models.config import AppConfig
 
-
-class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-    )
-
-    camera_host: str | None = None
-    camera_rtsp_port: int = 554
-    camera_user: str = "admin"
-    camera_password: str | None = None
-    camera_channel: int = 1
-    camera_stream: str = "main"
-    camera_onvif_port: int = 8000
-
-    app_host: str = "0.0.0.0"
-    app_port: int = 8080
-    debug: bool = False
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def rtsp_url(self) -> str | None:
-        """Build IPCAM-compatible RTSP URL, or None when host/password absent."""
-        if self.camera_host is None or self.camera_password is None:
-            return None
-        return (
-            f"rtsp://{self.camera_user}:{self.camera_password}"
-            f"@{self.camera_host}:{self.camera_rtsp_port}"
-            f"/h264/ch{self.camera_channel}/{self.camera_stream}/av_stream"
-        )
+_CONFIG_PATH: Path = Path(__file__).resolve().parent.parent / "config.toml"
 
 
 @lru_cache
-def get_settings() -> Settings:
-    """Return cached Settings singleton. Call get_settings.cache_clear() in tests."""
-    return Settings()
+def get_config(path: str = str(_CONFIG_PATH)) -> AppConfig:
+    """Return cached AppConfig singleton. Call get_config.cache_clear() in tests."""
+    p = Path(path)
+    if not p.exists():
+        return AppConfig()
+    with open(p, "rb") as f:
+        data = tomllib.load(f)
+    app_section = data.get("app", {})
+    cameras = data.get("cameras", [])
+    return AppConfig.model_validate({**app_section, "cameras": cameras})

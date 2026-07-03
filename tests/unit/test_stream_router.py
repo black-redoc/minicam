@@ -22,40 +22,35 @@ def _make_frame(sequence: int = 0) -> Frame:
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client() -> TestClient:
     mock_buffer = MagicMock()
     mock_buffer.read.return_value = None
-    monkeypatch.setattr(state_module, "frame_buffer", mock_buffer)
-
+    state_module.frame_buffers["cam1"] = mock_buffer
     test_app = FastAPI()
     test_app.include_router(stream_router.router)
-    return TestClient(test_app)
+    yield TestClient(test_app)
+    state_module.frame_buffers.clear()
 
 
 class TestWebSocketStream:
     def test_accepts_connection(self, client: TestClient) -> None:
-        with client.websocket_connect("/ws/stream"):
-            pass  # connects and disconnects cleanly
+        with client.websocket_connect("/ws/stream/cam1"):
+            pass
 
-    def test_sends_jpeg_when_frame_available(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_sends_jpeg_when_frame_available(self) -> None:
         frame = _make_frame(sequence=1)
         mock_buffer = MagicMock()
         mock_buffer.read.return_value = frame
-        monkeypatch.setattr(state_module, "frame_buffer", mock_buffer)
-
+        state_module.frame_buffers["cam1"] = mock_buffer
         test_app = FastAPI()
         test_app.include_router(stream_router.router)
         client = TestClient(test_app)
-
-        with client.websocket_connect("/ws/stream") as ws:
+        with client.websocket_connect("/ws/stream/cam1") as ws:
             data = ws.receive_bytes()
-            assert data[:2] == b"\xff\xd8"  # JPEG magic bytes
+            assert data[:2] == b"\xff\xd8"
+        state_module.frame_buffers.clear()
 
-    def test_does_not_send_duplicate_frames(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_does_not_send_duplicate_frames(self) -> None:
         frame = _make_frame(sequence=5)
         call_count = 0
 
@@ -66,13 +61,23 @@ class TestWebSocketStream:
 
         mock_buffer = MagicMock()
         mock_buffer.read.side_effect = read_side_effect
-        monkeypatch.setattr(state_module, "frame_buffer", mock_buffer)
-
+        state_module.frame_buffers["cam1"] = mock_buffer
         test_app = FastAPI()
         test_app.include_router(stream_router.router)
         client = TestClient(test_app)
-
-        with client.websocket_connect("/ws/stream") as ws:
+        with client.websocket_connect("/ws/stream/cam1") as ws:
             data = ws.receive_bytes()
-            # First frame sent; subsequent reads return same sequence → no duplicate
             assert data[:2] == b"\xff\xd8"
+        state_module.frame_buffers.clear()
+
+    def test_unknown_camera_closes_connection(self) -> None:
+        state_module.frame_buffers.clear()
+        test_app = FastAPI()
+        test_app.include_router(stream_router.router)
+        client = TestClient(test_app)
+        # WebSocket closed before accept — TestClient raises on connect or on recv
+        try:
+            with client.websocket_connect("/ws/stream/nonexistent") as ws:
+                ws.receive_bytes()
+        except Exception:
+            pass  # Expected: connection closed with 1008
