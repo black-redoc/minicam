@@ -1,122 +1,151 @@
-"""Setup and configuration endpoints: config read/write and camera discovery."""
+"""Setup and configuration endpoints: CRUD for cameras and WS-Discovery."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
-from app import settings as _settings_mod
 from app import state
-from app.models.config import ConfigRequest, ConfigResponse, DiscoveredCamera
+from app.models.config import (
+    CameraConfig,
+    CameraConfigRequest,
+    CameraConfigResponse,
+    DiscoveredCamera,
+)
 from app.services.camera import RTSPCamera
-from app.services.config_writer import read_env_config, write_env_config
+from app.services.config_writer import add_camera, load_config, remove_camera, update_camera
 from app.services.discovery import discover_onvif_cameras
 from app.services.ptz import PTZConfig, PTZService
-from app.settings import get_settings
+from app.settings import get_config
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["setup"])
 
-_ENV_KEY_MAP: dict[str, str] = {
-    "camera_host": "CAMERA_HOST",
-    "camera_rtsp_port": "CAMERA_RTSP_PORT",
-    "camera_user": "CAMERA_USER",
-    "camera_password": "CAMERA_PASSWORD",
-    "camera_channel": "CAMERA_CHANNEL",
-    "camera_stream": "CAMERA_STREAM",
-    "camera_onvif_port": "CAMERA_ONVIF_PORT",
-}
 
-
-@router.get("/api/config", response_model=ConfigResponse)
-async def get_config() -> ConfigResponse:
-    """Return current camera configuration. Password is always redacted."""
-    settings = get_settings()
-    return ConfigResponse(
-        camera_host=settings.camera_host or "",
-        camera_rtsp_port=settings.camera_rtsp_port,
-        camera_user=settings.camera_user,
-        camera_password="",
-        camera_channel=settings.camera_channel,
-        camera_stream=settings.camera_stream,  # type: ignore[arg-type]
-        camera_onvif_port=settings.camera_onvif_port,
+def _to_response(cam: CameraConfig) -> CameraConfigResponse:
+    return CameraConfigResponse(
+        name=cam.name,
+        host=cam.host,
+        rtsp_port=cam.rtsp_port,
+        onvif_port=cam.onvif_port,
+        user=cam.user,
+        password="",
+        channel=cam.channel,
+        stream=cam.stream,
     )
 
 
-def _build_env_updates(body: ConfigRequest) -> dict[str, str]:
-    """Build the .env updates dict from a config request.
-
-    Empty password is excluded so the stored credential is preserved.
-    """
-    updates: dict[str, str] = {
-        _ENV_KEY_MAP["camera_host"]: body.camera_host,
-        _ENV_KEY_MAP["camera_rtsp_port"]: str(body.camera_rtsp_port),
-        _ENV_KEY_MAP["camera_user"]: body.camera_user,
-        _ENV_KEY_MAP["camera_channel"]: str(body.camera_channel),
-        _ENV_KEY_MAP["camera_stream"]: body.camera_stream,
-        _ENV_KEY_MAP["camera_onvif_port"]: str(body.camera_onvif_port),
-    }
-    if body.camera_password != "":
-        updates[_ENV_KEY_MAP["camera_password"]] = body.camera_password
-    return updates
-
-
-async def _stop_camera() -> None:
-    """Stop the running camera in a thread pool to avoid blocking the event loop."""
-    if state.camera is not None:
+async def _stop_camera(name: str) -> None:
+    cam = state.cameras.get(name)
+    if cam is not None:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, state.camera.stop)
+        await loop.run_in_executor(None, cam.stop)
+        del state.cameras[name]
 
 
-async def _disconnect_ptz() -> None:
-    """Disconnect PTZ service in a thread pool if currently connected."""
-    if state.ptz is not None and state.ptz.is_connected():
+async def _stop_ptz(name: str) -> None:
+    ptz = state.ptz_services.get(name)
+    if ptz is not None and ptz.is_connected():
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, state.ptz.disconnect)
+        await loop.run_in_executor(None, ptz.disconnect)
+    if name in state.ptz_services:
+        del state.ptz_services[name]
 
 
-def _start_camera_and_ptz(settings: object) -> None:
-    """Create and start fresh camera and PTZ instances from new settings."""
-    from app.settings import Settings  # local import avoids circular reference
+def _start_camera_and_ptz(cam_config: CameraConfig) -> None:
+    buf = state.frame_buffers.get(cam_config.name)
+    if buf is None:
+        from app.buffers.double_frame_buffer import DoubleFrameBuffer
+        buf = DoubleFrameBuffer()
+        state.frame_buffers[cam_config.name] = buf
 
-    s: Settings = settings  # type: ignore[assignment]
-    if s.camera_host is None or s.rtsp_url is None:
-        return
+    camera = RTSPCamera(rtsp_url=cam_config.rtsp_url, buffer=buf)
+    camera.start()
+    state.cameras[cam_config.name] = camera
 
-    state.camera = RTSPCamera(rtsp_url=s.rtsp_url, buffer=state.frame_buffer)
-    state.camera.start()
-
-    state.ptz = PTZService(
+    state.ptz_services[cam_config.name] = PTZService(
         PTZConfig(
-            host=s.camera_host,
-            port=s.camera_onvif_port,
-            user=s.camera_user,
-            password=s.camera_password or "",
+            host=cam_config.host,
+            port=cam_config.onvif_port,
+            user=cam_config.user,
+            password=cam_config.password,
         )
     )
 
 
-@router.put("/api/config")
-async def update_config(body: ConfigRequest) -> dict[str, str]:
-    """Persist new camera config to .env and restart camera/PTZ services.
+@router.get("/api/cameras", response_model=list[CameraConfigResponse])
+async def list_cameras() -> list[CameraConfigResponse]:
+    """Return all configured cameras. Passwords are always redacted."""
+    config = get_config()
+    return [_to_response(cam) for cam in config.cameras]
 
-    An empty password string in the request means "keep existing password".
-    """
-    updates = _build_env_updates(body)
-    write_env_config(updates)
 
-    await _stop_camera()
-    await _disconnect_ptz()
+@router.get("/api/cameras/{name}", response_model=CameraConfigResponse)
+async def get_camera(name: str) -> CameraConfigResponse:
+    """Return a single camera by name. Password is always redacted."""
+    config = get_config()
+    for cam in config.cameras:
+        if cam.name == name:
+            return _to_response(cam)
+    raise HTTPException(status_code=404, detail=f"Camera '{name}' not found")
 
-    # Call cache_clear on the canonical reference so patches don't break it.
-    _settings_mod.get_settings.cache_clear()
-    new_settings = get_settings()
 
-    _start_camera_and_ptz(new_settings)
+@router.post("/api/cameras", response_model=CameraConfigResponse, status_code=201)
+async def create_camera(body: CameraConfigRequest) -> CameraConfigResponse:
+    """Add a new camera to the config and start its services."""
+    cam_config = CameraConfig(**body.model_dump())
+    try:
+        add_camera(cam_config)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    get_config.cache_clear()
+    _start_camera_and_ptz(cam_config)
+    return _to_response(cam_config)
 
+
+@router.put("/api/cameras/{name}", response_model=CameraConfigResponse)
+async def edit_camera(name: str, body: CameraConfigRequest) -> CameraConfigResponse:
+    """Update an existing camera and restart its services."""
+    if not body.password:
+        config = get_config()
+        existing = next((c for c in config.cameras if c.name == name), None)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"Camera '{name}' not found")
+        body = body.model_copy(update={"password": existing.password})
+
+    cam_config = CameraConfig(**body.model_dump())
+    try:
+        update_camera(name, cam_config)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    get_config.cache_clear()
+    await _stop_camera(name)
+    await _stop_ptz(name)
+    if name != cam_config.name:
+        old_buf = state.frame_buffers.pop(name, None)
+        if old_buf is not None:
+            old_buf.shutdown()
+    _start_camera_and_ptz(cam_config)
+    return _to_response(cam_config)
+
+
+@router.delete("/api/cameras/{name}")
+async def delete_camera(name: str) -> dict[str, str]:
+    """Remove a camera from the config and stop its services."""
+    try:
+        remove_camera(name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    get_config.cache_clear()
+    await _stop_camera(name)
+    await _stop_ptz(name)
+    buf = state.frame_buffers.get(name)
+    if buf is not None:
+        buf.shutdown()
+        del state.frame_buffers[name]
     return {"status": "ok"}
 
 

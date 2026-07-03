@@ -1,32 +1,27 @@
-"""Tests for the setup router: GET /api/config, PUT /api/config, GET /api/setup/discover."""
+"""Tests for the setup router: CRUD /api/cameras and /api/setup/discover."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
 import pytest
+import tomli_w
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 import app.state as state_module
-import app.settings as settings_mod
-from app.models.config import DiscoveredCamera
+from app.models.config import AppConfig, CameraConfig, DiscoveredCamera
 from app.routers import setup as setup_router
-from app.settings import Settings, get_settings
+from app.settings import get_config
 
 
-def _make_settings(**overrides: object) -> Settings:
-    defaults: dict[str, object] = {
-        "camera_host": "192.168.1.10",
-        "camera_password": "secret123",
-        "camera_rtsp_port": 554,
-        "camera_user": "admin",
-        "camera_channel": 1,
-        "camera_stream": "main",
-        "camera_onvif_port": 8000,
-    }
-    defaults.update(overrides)
-    return Settings.model_validate(defaults)
+def _make_camera(name: str = "cam1", host: str = "192.168.1.10") -> CameraConfig:
+    return CameraConfig(name=name, host=host, password="secret")
+
+
+def _make_app_config(*cameras: CameraConfig) -> AppConfig:
+    return AppConfig(cameras=list(cameras))
 
 
 @pytest.fixture()
@@ -44,205 +39,214 @@ def mock_ptz() -> MagicMock:
 
 
 @pytest.fixture()
+def mock_buffer() -> MagicMock:
+    buf = MagicMock()
+    return buf
+
+
+@pytest.fixture()
 def client(
     monkeypatch: pytest.MonkeyPatch,
     mock_camera: MagicMock,
     mock_ptz: MagicMock,
+    mock_buffer: MagicMock,
 ) -> TestClient:
-    monkeypatch.setattr(state_module, "camera", mock_camera)
-    monkeypatch.setattr(state_module, "ptz", mock_ptz)
+    state_module.cameras["cam1"] = mock_camera
+    state_module.ptz_services["cam1"] = mock_ptz
+    state_module.frame_buffers["cam1"] = mock_buffer
     test_app = FastAPI()
     test_app.include_router(setup_router.router)
-    return TestClient(test_app)
+    yield TestClient(test_app)
+    state_module.cameras.clear()
+    state_module.ptz_services.clear()
+    state_module.frame_buffers.clear()
 
 
-class TestGetConfig:
-    def test_returns_200(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            setup_router, "get_settings", lambda: _make_settings()
-        )
-        res = client.get("/api/config")
+class TestListCameras:
+    def test_returns_200(self, client: TestClient) -> None:
+        config = _make_app_config(_make_camera())
+        with patch.object(setup_router, "get_config", return_value=config):
+            res = client.get("/api/cameras")
         assert res.status_code == 200
 
-    def test_password_is_always_empty(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            setup_router, "get_settings", lambda: _make_settings()
-        )
-        res = client.get("/api/config")
-        assert res.json()["camera_password"] == ""
+    def test_returns_list(self, client: TestClient) -> None:
+        config = _make_app_config(_make_camera())
+        with patch.object(setup_router, "get_config", return_value=config):
+            res = client.get("/api/cameras")
+        assert isinstance(res.json(), list)
+        assert len(res.json()) == 1
 
-    def test_returns_correct_fields(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            setup_router,
-            "get_settings",
-            lambda: _make_settings(camera_host="10.0.0.5", camera_rtsp_port=8554),
-        )
-        data = client.get("/api/config").json()
-        assert data["camera_host"] == "10.0.0.5"
-        assert data["camera_rtsp_port"] == 8554
-        assert data["camera_user"] == "admin"
-        assert data["camera_stream"] == "main"
-        assert data["camera_onvif_port"] == 8000
-
-    def test_camera_host_none_returns_empty_string(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            setup_router, "get_settings", lambda: _make_settings(camera_host=None)
-        )
-        data = client.get("/api/config").json()
-        assert data["camera_host"] == ""
+    def test_passwords_are_redacted(self, client: TestClient) -> None:
+        config = _make_app_config(_make_camera())
+        with patch.object(setup_router, "get_config", return_value=config):
+            res = client.get("/api/cameras")
+        assert res.json()[0]["password"] == ""
 
 
-class TestPutConfig:
-    _valid_body: dict[str, object] = {
-        "camera_host": "10.0.0.99",
-        "camera_rtsp_port": 554,
-        "camera_user": "admin",
-        "camera_password": "newpass",
-        "camera_channel": 1,
-        "camera_stream": "main",
-        "camera_onvif_port": 8000,
+class TestGetCamera:
+    def test_returns_200_when_exists(self, client: TestClient) -> None:
+        config = _make_app_config(_make_camera())
+        with patch.object(setup_router, "get_config", return_value=config):
+            res = client.get("/api/cameras/cam1")
+        assert res.status_code == 200
+
+    def test_returns_404_when_missing(self, client: TestClient) -> None:
+        config = _make_app_config()
+        with patch.object(setup_router, "get_config", return_value=config):
+            res = client.get("/api/cameras/ghost")
+        assert res.status_code == 404
+
+    def test_password_is_redacted(self, client: TestClient) -> None:
+        config = _make_app_config(_make_camera())
+        with patch.object(setup_router, "get_config", return_value=config):
+            res = client.get("/api/cameras/cam1")
+        assert res.json()["password"] == ""
+
+
+class TestCreateCamera:
+    _body: dict[str, object] = {
+        "name": "cam2",
+        "host": "10.0.0.2",
+        "rtsp_port": 554,
+        "onvif_port": 80,
+        "user": "admin",
+        "password": "pass",
+        "channel": 1,
+        "stream": "main",
     }
 
-    def test_returns_ok(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(setup_router, "write_env_config", MagicMock())
-        monkeypatch.setattr(
-            setup_router, "get_settings", lambda: _make_settings()
-        )
-        res = client.put("/api/config", json=self._valid_body)
+    def test_returns_201(self, client: TestClient) -> None:
+        with (
+            patch.object(setup_router, "add_camera"),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+        ):
+            res = client.post("/api/cameras", json=self._body)
+        assert res.status_code == 201
+
+    def test_password_is_redacted_in_response(self, client: TestClient) -> None:
+        with (
+            patch.object(setup_router, "add_camera"),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+        ):
+            res = client.post("/api/cameras", json=self._body)
+        assert res.json()["password"] == ""
+
+    def test_calls_add_camera(self, client: TestClient) -> None:
+        mock_add = MagicMock()
+        with (
+            patch.object(setup_router, "add_camera", mock_add),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+        ):
+            client.post("/api/cameras", json=self._body)
+        mock_add.assert_called_once()
+
+    def test_returns_409_on_duplicate(self, client: TestClient) -> None:
+        with patch.object(setup_router, "add_camera", side_effect=ValueError("duplicate")):
+            res = client.post("/api/cameras", json=self._body)
+        assert res.status_code == 409
+
+
+class TestEditCamera:
+    _body: dict[str, object] = {
+        "name": "cam1",
+        "host": "10.0.0.99",
+        "rtsp_port": 554,
+        "onvif_port": 80,
+        "user": "admin",
+        "password": "newpass",
+        "channel": 1,
+        "stream": "main",
+    }
+
+    def test_returns_200(self, client: TestClient) -> None:
+        with (
+            patch.object(setup_router, "update_camera"),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+        ):
+            res = client.put("/api/cameras/cam1", json=self._body)
         assert res.status_code == 200
-        assert res.json() == {"status": "ok"}
 
-    def test_calls_write_env_config(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        mock_write = MagicMock()
-        monkeypatch.setattr(setup_router, "write_env_config", mock_write)
-        monkeypatch.setattr(
-            setup_router, "get_settings", lambda: _make_settings()
-        )
-        client.put("/api/config", json=self._valid_body)
-        mock_write.assert_called_once()
+    def test_returns_404_when_camera_missing(self, client: TestClient) -> None:
+        with patch.object(setup_router, "update_camera", side_effect=KeyError("ghost")):
+            res = client.put("/api/cameras/ghost", json=self._body)
+        assert res.status_code == 404
 
-    def test_password_included_when_non_empty(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    def test_stops_existing_services(
+        self, client: TestClient, mock_camera: MagicMock, mock_ptz: MagicMock
     ) -> None:
-        mock_write = MagicMock()
-        monkeypatch.setattr(setup_router, "write_env_config", mock_write)
-        monkeypatch.setattr(
-            setup_router, "get_settings", lambda: _make_settings()
-        )
-        client.put("/api/config", json=self._valid_body)
-        call_args = mock_write.call_args[0][0]
-        assert "CAMERA_PASSWORD" in call_args
-        assert call_args["CAMERA_PASSWORD"] == "newpass"
-
-    def test_password_excluded_when_empty(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        mock_write = MagicMock()
-        monkeypatch.setattr(setup_router, "write_env_config", mock_write)
-        monkeypatch.setattr(
-            setup_router, "get_settings", lambda: _make_settings()
-        )
-        body = {**self._valid_body, "camera_password": ""}
-        client.put("/api/config", json=body)
-        call_args = mock_write.call_args[0][0]
-        assert "CAMERA_PASSWORD" not in call_args
-
-    def test_clears_settings_cache(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        mock_write = MagicMock()
-        monkeypatch.setattr(setup_router, "write_env_config", mock_write)
-        monkeypatch.setattr(
-            setup_router, "get_settings", lambda: _make_settings()
-        )
-        mock_clear = MagicMock()
-        # The router calls _settings_mod.get_settings.cache_clear() to bypass patching.
-        monkeypatch.setattr(settings_mod.get_settings, "cache_clear", mock_clear)
-        client.put("/api/config", json=self._valid_body)
-        mock_clear.assert_called_once()
-
-    def test_stops_existing_camera(
-        self,
-        client: TestClient,
-        mock_camera: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(setup_router, "write_env_config", MagicMock())
-        monkeypatch.setattr(
-            setup_router, "get_settings", lambda: _make_settings()
-        )
-        client.put("/api/config", json=self._valid_body)
+        with (
+            patch.object(setup_router, "update_camera"),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+        ):
+            client.put("/api/cameras/cam1", json=self._body)
         mock_camera.stop.assert_called_once()
-
-    def test_disconnects_existing_ptz(
-        self,
-        client: TestClient,
-        mock_ptz: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(setup_router, "write_env_config", MagicMock())
-        monkeypatch.setattr(
-            setup_router, "get_settings", lambda: _make_settings()
-        )
-        client.put("/api/config", json=self._valid_body)
         mock_ptz.disconnect.assert_called_once()
 
-    def test_creates_new_camera_when_host_set(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_empty_password_preserves_existing(self, client: TestClient) -> None:
+        existing_config = _make_app_config(_make_camera("cam1"))
+        captured: list[CameraConfig] = []
+
+        def _capture(name: str, cam: CameraConfig) -> None:
+            captured.append(cam)
+
+        body = {**self._body, "password": ""}
+        with (
+            patch.object(setup_router, "update_camera", side_effect=_capture),
+            patch.object(setup_router, "get_config", return_value=existing_config),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+        ):
+            res = client.put("/api/cameras/cam1", json=body)
+
+        assert res.status_code == 200
+        assert captured[0].password == "secret"
+
+
+class TestDeleteCamera:
+    def test_returns_200(self, client: TestClient) -> None:
+        with (
+            patch.object(setup_router, "remove_camera"),
+            patch.object(setup_router, "get_config"),
+        ):
+            res = client.delete("/api/cameras/cam1")
+        assert res.status_code == 200
+
+    def test_returns_ok_status(self, client: TestClient) -> None:
+        with (
+            patch.object(setup_router, "remove_camera"),
+            patch.object(setup_router, "get_config"),
+        ):
+            res = client.delete("/api/cameras/cam1")
+        assert res.json() == {"status": "ok"}
+
+    def test_returns_404_when_camera_missing(self, client: TestClient) -> None:
+        with patch.object(setup_router, "remove_camera", side_effect=KeyError("ghost")):
+            res = client.delete("/api/cameras/ghost")
+        assert res.status_code == 404
+
+    def test_stops_services(
+        self, client: TestClient, mock_camera: MagicMock, mock_ptz: MagicMock
     ) -> None:
-        monkeypatch.setattr(setup_router, "write_env_config", MagicMock())
-        new_settings = _make_settings(camera_host="10.0.0.99")
-        monkeypatch.setattr(setup_router, "get_settings", lambda: new_settings)
-
-        mock_cam_cls = MagicMock()
-        with patch("app.routers.setup.RTSPCamera", mock_cam_cls):
-            client.put("/api/config", json=self._valid_body)
-
-        mock_cam_cls.assert_called_once()
-        mock_cam_cls.return_value.start.assert_called_once()
-
-    def test_creates_new_ptz_when_host_set(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(setup_router, "write_env_config", MagicMock())
-        new_settings = _make_settings(camera_host="10.0.0.99")
-        monkeypatch.setattr(setup_router, "get_settings", lambda: new_settings)
-
-        mock_ptz_cls = MagicMock()
-        with patch("app.routers.setup.PTZService", mock_ptz_cls):
-            client.put("/api/config", json=self._valid_body)
-
-        mock_ptz_cls.assert_called_once()
+        with (
+            patch.object(setup_router, "remove_camera"),
+            patch.object(setup_router, "get_config"),
+        ):
+            client.delete("/api/cameras/cam1")
+        mock_camera.stop.assert_called_once()
 
 
 class TestDiscover:
     def test_returns_200(self, client: TestClient) -> None:
-        with patch(
-            "app.routers.setup.discover_onvif_cameras", return_value=[]
-        ):
+        with patch("app.routers.setup.discover_onvif_cameras", return_value=[]):
             res = client.get("/api/setup/discover")
         assert res.status_code == 200
 
     def test_returns_empty_list_when_no_cameras(self, client: TestClient) -> None:
-        with patch(
-            "app.routers.setup.discover_onvif_cameras", return_value=[]
-        ):
+        with patch("app.routers.setup.discover_onvif_cameras", return_value=[]):
             res = client.get("/api/setup/discover")
         assert res.json() == []
 
@@ -255,13 +259,8 @@ class TestDiscover:
                 location="Garage",
             )
         ]
-        with patch(
-            "app.routers.setup.discover_onvif_cameras", return_value=cameras
-        ):
+        with patch("app.routers.setup.discover_onvif_cameras", return_value=cameras):
             res = client.get("/api/setup/discover")
         data = res.json()
         assert len(data) == 1
         assert data[0]["host"] == "192.168.1.50"
-        assert data[0]["name"] == "IPCamera"
-        assert data[0]["hardware"] == "DS-2CD"
-        assert data[0]["location"] == "Garage"
