@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,6 +41,40 @@ class PTZService:
         self._camera: ONVIFCamera | None = None
         self._ptz: Any = None
         self._profile_token: str | None = None
+        self._lock = threading.Lock()
+
+    def ensure_connected(self) -> None:
+        """Connect if not already connected. Safe under concurrent callers."""
+        with self._lock:
+            if not self.is_connected():
+                self.connect()
+
+    def reconnect(self) -> None:
+        """Drop and re-establish the ONVIF session. Safe under concurrent callers."""
+        with self._lock:
+            self.disconnect()
+            self.connect()
+
+    def run_command(self, action: str) -> None:
+        """Ensure connected and execute a PTZ action as one atomic step.
+
+        The zeep SOAP client behind `_ptz` isn't safe for concurrent calls,
+        and a burst of clicks (a normal way to use a PTZ pad) can otherwise
+        interleave several ONVIF requests on the same camera. Holding the
+        lock across connect *and* the action serializes every command for
+        this camera, so callers never need their own locking.
+        """
+        with self._lock:
+            if not self.is_connected():
+                self.connect()
+            getattr(self, action)()
+
+    def reconnect_and_run(self, action: str) -> None:
+        """Drop the session, reconnect, and execute `action` atomically."""
+        with self._lock:
+            self.disconnect()
+            self.connect()
+            getattr(self, action)()
 
     def connect(self) -> None:
         """Establish ONVIF connection and retrieve the first media profile token."""

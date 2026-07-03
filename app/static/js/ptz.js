@@ -10,18 +10,20 @@ const PTZ_DIRECTIONS = ['up', 'down', 'left', 'right'];
 /**
  * Send a single PTZ action to the backend for a specific camera.
  *
- * @param {string} action      - One of: up | down | left | right | stop
- * @param {string} cameraName  - Target camera name.
+ * @param {string} action        - One of: up | down | left | right | stop
+ * @param {string} cameraName    - Target camera name.
+ * @param {AbortSignal} signal   - Aborts this request if a newer one supersedes it.
  * @returns {Promise<void>}
  */
-async function sendPtz(action, cameraName) {
+async function sendPtz(action, cameraName, signal) {
     try {
         const res = await fetch(
             `/api/ptz/${encodeURIComponent(cameraName)}/${action}`,
-            { method: 'POST' }
+            { method: 'POST', signal }
         );
         if (!res.ok) console.warn(`PTZ "${action}" responded ${res.status}`);
     } catch (err) {
+        if (err.name === 'AbortError') return; // superseded by a newer command
         console.error(`PTZ "${action}" failed:`, err);
     }
 }
@@ -32,12 +34,26 @@ async function sendPtz(action, cameraName) {
  * Expects buttons with [data-ptz="<action>"] attributes.
  * Direction buttons auto-send "stop" on release.
  *
+ * Only one PTZ request is ever in flight at a time: dispatching a new action
+ * aborts whichever one is still pending. A user mashing buttons (rapid
+ * clicks, not just holding one down) would otherwise pile up several
+ * concurrent requests for the same camera — this keeps that down to one
+ * request on the wire, no matter how fast someone clicks.
+ *
  * @param {HTMLElement} container
  * @param {string}      cameraName  - Initial camera name for PTZ requests.
  * @returns {{ setCameraName: (name: string) => void }}
  */
 function initPtz(container, cameraName) {
     let currentCameraName = cameraName;
+    let inFlight = null;
+
+    function dispatch(action) {
+        inFlight?.abort();
+        const controller = new AbortController();
+        inFlight = controller;
+        sendPtz(action, currentCameraName, controller.signal);
+    }
 
     for (const action of PTZ_DIRECTIONS) {
         const btn = container.querySelector(`[data-ptz="${action}"]`);
@@ -47,12 +63,12 @@ function initPtz(container, cameraName) {
             e.preventDefault();
             btn.setPointerCapture(e.pointerId);
             btn.setAttribute('aria-pressed', 'true');
-            sendPtz(action, currentCameraName);
+            dispatch(action);
         });
 
         const release = () => {
             btn.removeAttribute('aria-pressed');
-            sendPtz('stop', currentCameraName);
+            dispatch('stop');
         };
 
         btn.addEventListener('pointerup',     release);
@@ -63,7 +79,7 @@ function initPtz(container, cameraName) {
     if (stopBtn) {
         stopBtn.addEventListener('pointerdown', (e) => {
             e.preventDefault();
-            sendPtz('stop', currentCameraName);
+            dispatch('stop');
         });
     }
 

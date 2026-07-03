@@ -43,15 +43,13 @@ async def ptz_command(camera_name: str, action: str) -> dict[str, str]:
     loop = asyncio.get_running_loop()
 
     try:
-        if not svc.is_connected():
-            await loop.run_in_executor(None, svc.connect)
-        await loop.run_in_executor(None, getattr(svc, action))
+        await loop.run_in_executor(state.ptz_executor, svc.run_command, action)
     except Exception as exc:
         if _is_connection_error(exc):
             try:
-                svc.disconnect()
-                await loop.run_in_executor(None, svc.connect)
-                await loop.run_in_executor(None, getattr(svc, action))
+                await loop.run_in_executor(
+                    state.ptz_executor, svc.reconnect_and_run, action
+                )
             except Exception as retry_exc:
                 raise HTTPException(status_code=503, detail=str(retry_exc)) from retry_exc
         else:

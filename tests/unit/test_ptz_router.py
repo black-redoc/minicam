@@ -51,26 +51,18 @@ class TestPtzEndpointSuccess:
         self, client: TestClient, mock_ptz: MagicMock, action: str
     ) -> None:
         client.post(f"/api/ptz/cam1/{action}")
-        getattr(mock_ptz, action).assert_called_once()
+        mock_ptz.run_command.assert_called_once_with(action)
 
 
-class TestPtzEndpointLazyConnect:
-    def test_connects_when_not_connected(self) -> None:
-        svc = MagicMock()
-        svc.is_connected.return_value = False
-        state_module.ptz_services["lazy"] = svc
-        test_app = FastAPI()
-        test_app.include_router(ptz_router.router)
-        client = TestClient(test_app)
-        client.post("/api/ptz/lazy/stop")
-        svc.connect.assert_called_once()
-        state_module.ptz_services.pop("lazy", None)
-
-    def test_does_not_reconnect_when_already_connected(
+class TestPtzEndpointDelegatesToService:
+    def test_delegates_connect_and_action_to_run_command(
         self, client: TestClient, mock_ptz: MagicMock
     ) -> None:
+        # Connect-if-needed + the action itself are one atomic call inside
+        # PTZService (see test_ptz.py) so concurrent requests can't interleave
+        # ONVIF calls on the same camera; the router just delegates.
         client.post("/api/ptz/cam1/up")
-        mock_ptz.connect.assert_not_called()
+        mock_ptz.run_command.assert_called_once_with("up")
 
 
 class TestPtzEndpointErrors:
@@ -84,8 +76,7 @@ class TestPtzEndpointErrors:
 
     def test_returns_503_on_service_exception(self) -> None:
         svc = MagicMock()
-        svc.is_connected.return_value = True
-        svc.up.side_effect = RuntimeError("ONVIF timeout")
+        svc.run_command.side_effect = RuntimeError("ONVIF timeout")
         state_module.ptz_services["err_cam"] = svc
         test_app = FastAPI()
         test_app.include_router(ptz_router.router)
@@ -97,26 +88,25 @@ class TestPtzEndpointErrors:
 
     def test_reconnects_and_retries_on_connection_reset(self) -> None:
         svc = MagicMock()
-        svc.is_connected.return_value = True
-        svc.up.side_effect = [
-            Exception("Unknown error: ('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))"),
-            None,
-        ]
+        svc.run_command.side_effect = Exception(
+            "Unknown error: ('Connection aborted.', "
+            "ConnectionResetError(104, 'Connection reset by peer'))"
+        )
+        svc.reconnect_and_run.return_value = None
         state_module.ptz_services["retry_cam"] = svc
         test_app = FastAPI()
         test_app.include_router(ptz_router.router)
         client = TestClient(test_app)
         res = client.post("/api/ptz/retry_cam/up")
         assert res.status_code == 200
-        svc.disconnect.assert_called_once()
-        svc.connect.assert_called_once()
-        assert svc.up.call_count == 2
+        svc.run_command.assert_called_once_with("up")
+        svc.reconnect_and_run.assert_called_once_with("up")
         state_module.ptz_services.pop("retry_cam", None)
 
     def test_returns_503_if_retry_also_fails_on_connection_error(self) -> None:
         svc = MagicMock()
-        svc.is_connected.return_value = True
-        svc.up.side_effect = Exception("Connection reset by peer")
+        svc.run_command.side_effect = Exception("Connection reset by peer")
+        svc.reconnect_and_run.side_effect = Exception("Connection reset by peer")
         state_module.ptz_services["fail_cam"] = svc
         test_app = FastAPI()
         test_app.include_router(ptz_router.router)
