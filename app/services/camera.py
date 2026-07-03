@@ -84,15 +84,36 @@ class RTSPCamera:
         return self._connected
 
     def _capture_loop(self) -> None:
-        """Reconnect on failure until stop() is called."""
+        """Reconnect on failure until stop() is called.
+
+        _capture_stream() can end two ways: by raising (network/decode error)
+        or by returning normally (the demuxer simply stopped yielding packets
+        — e.g. the camera closed the RTSP session on its own, no exception
+        involved). Both are treated as a disconnect: logged and followed by
+        the same backoff delay, so reconnects are never silent or immediate.
+        """
         while self._running:
             try:
                 self._capture_stream()
-            except Exception as exc:
-                logger.error("RTSP capture error: %s", exc)
-                self._connected = False
+            except Exception:
+                logger.error(
+                    "RTSP capture error on %s", self._rtsp_url, exc_info=True
+                )
+            else:
                 if self._running:
-                    time.sleep(_RECONNECT_DELAY_SECONDS)
+                    logger.warning(
+                        "RTSP stream for %s ended without an error "
+                        "(demuxer stopped yielding packets)",
+                        self._rtsp_url,
+                    )
+            self._connected = False
+            if self._running:
+                logger.warning(
+                    "Reconnecting to %s in %.1fs",
+                    self._rtsp_url,
+                    _RECONNECT_DELAY_SECONDS,
+                )
+                time.sleep(_RECONNECT_DELAY_SECONDS)
 
     def _capture_stream(self) -> None:
         """Open the RTSP stream and decode frames until disconnection."""
@@ -106,6 +127,15 @@ class RTSPCamera:
                 s for s in self._container.streams if s.type == "video"
             )
             video_stream.codec_context.flags |= Flags.low_delay
+            # Bound ffmpeg's internal slice-threading. With thread_count=0
+            # (auto) it spawns one decode worker per CPU core — all inheriting
+            # this thread's "rtsp_camera" name — and on reconnect a fresh pool
+            # is created without the old one being torn down synchronously,
+            # so the thread count multiplies with every reconnect. A fixed
+            # small count keeps decode parallel enough for real-time playback
+            # while capping how many threads a single stream can ever hold.
+            video_stream.codec_context.thread_type = "SLICE"
+            video_stream.codec_context.thread_count = 2
             self._connected = True
             logger.info("RTSP stream opened: %s", self._rtsp_url)
 
