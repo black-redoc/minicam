@@ -16,6 +16,9 @@
         <span class="text-sky-400 font-bold tracking-tight text-base">minicam</span>
     </div>
 
+    <!-- Camera selector — populated by JS; hidden when only one camera is present -->
+    <div id="camera-selector" class="flex items-center gap-1"></div>
+
     <div class="flex items-center gap-3">
         <span id="fps-display"
               class="hidden sm:inline text-xs text-slate-400 font-mono tabular-nums">
@@ -24,6 +27,23 @@
         <span id="status-badge" class="badge badge--connecting">
             <span data-label>Connecting…</span>
         </span>
+
+        <!-- Docs link -->
+        <a href="/doc/"
+           aria-label="Open documentation"
+           class="flex items-center gap-1.5 px-2 h-8 rounded-lg
+                  text-slate-400 hover:text-slate-100 hover:bg-slate-800
+                  transition-colors focus:outline-none focus:ring-2
+                  focus:ring-sky-500 focus:ring-offset-1 focus:ring-offset-slate-900">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" class="w-4 h-4 pointer-events-none shrink-0">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            </svg>
+            <span class="hidden sm:inline text-xs font-medium">Docs</span>
+        </a>
+
         <button id="config-btn"
                 type="button"
                 aria-label="Open camera settings"
@@ -57,7 +77,7 @@
         <!-- Feed -->
         <div class="video-container shadow-2xl">
             <img id="camera-feed"
-                 src=""
+                 src="{{ url_for('static', path='img/camera-placeholder.svg') }}"
                  alt="Live camera feed"
                  draggable="false">
 
@@ -75,7 +95,7 @@
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
                 </svg>
-                <span class="font-mono truncate">{{ camera_host }}</span>
+                <span id="active-camera-name" class="font-mono truncate">{{ active_camera }}</span>
             </div>
             <span id="info-fps" class="font-mono tabular-nums shrink-0">-- FPS</span>
         </div>
@@ -176,190 +196,15 @@
 
 <!-- ═══════════════════════════════════════════════════════════
      Config Modal
+     ConfigWidget renders all inner content dynamically.
      ═══════════════════════════════════════════════════════════ -->
-<div id="config-modal"
-     aria-hidden="true"
+<div id="config-modal" aria-hidden="true"
      class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-
-    <div role="dialog"
-         aria-modal="true"
-         aria-labelledby="config-modal-title"
+    <div role="dialog" aria-modal="true" aria-labelledby="config-modal-title"
          class="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl
-                w-full max-w-md max-h-[90vh] flex flex-col">
-
-        <!-- Modal header -->
-        <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700 shrink-0">
-            <h2 id="config-modal-title"
-                class="text-sm font-semibold text-slate-100 tracking-tight">
-                Camera Settings
-            </h2>
-            <button type="button"
-                    data-close-btn
-                    aria-label="Close settings"
-                    class="flex items-center justify-center w-7 h-7 rounded-md
-                           text-slate-400 hover:text-slate-100 hover:bg-slate-700
-                           transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                     stroke-linejoin="round" class="w-4 h-4 pointer-events-none">
-                    <line x1="18" y1="6" x2="6" y2="18"/>
-                    <line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-            </button>
-        </div>
-
-        <!-- Modal body (scrollable) -->
-        <div class="overflow-y-auto flex-1 px-5 py-4">
-
-            <!-- Inline error banner -->
-            <p data-config-error
-               role="alert"
-               class="hidden text-xs text-red-400 bg-red-950/40 border border-red-900/60
-                      rounded-md px-3 py-2 mb-4"></p>
-
-            <form data-config-form novalidate class="space-y-4">
-
-                <!-- Host / IP + discover trigger -->
-                <div class="flex flex-col gap-1.5">
-                    <label for="cfg-host"
-                           class="text-xs text-slate-400 font-medium">Host / IP</label>
-                    <div class="flex gap-2">
-                        <input id="cfg-host"
-                               name="camera_host"
-                               type="text"
-                               class="input-cfg flex-1 min-w-0"
-                               placeholder="192.168.1.x"
-                               autocomplete="off"
-                               spellcheck="false">
-                        <button type="button"
-                                data-discover-btn
-                                class="shrink-0 text-xs px-3 py-1.5 rounded-lg
-                                       border border-slate-600 text-slate-300
-                                       hover:text-slate-100 hover:border-slate-500
-                                       transition-colors focus:outline-none focus:ring-2
-                                       focus:ring-sky-500 disabled:opacity-50
-                                       disabled:cursor-not-allowed">
-                            Search
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Discovery results — hidden until Search is clicked -->
-                <div data-discover-section
-                     class="hidden rounded-lg bg-slate-900/60 border border-slate-700 px-3 py-2">
-                    <p class="text-xs text-slate-500 mb-2 font-medium uppercase tracking-wide">
-                        Found on network
-                    </p>
-                    <div data-discover-busy class="hidden">
-                        <div class="flex items-center gap-2 py-1 text-xs text-slate-400">
-                            <span class="w-3.5 h-3.5 border-2 border-slate-600 border-t-sky-400
-                                         rounded-full animate-spin shrink-0 block"></span>
-                            <span>Searching for cameras on the network…</span>
-                        </div>
-                    </div>
-                    <div data-discover-list aria-live="polite"></div>
-                </div>
-
-                <!-- RTSP Port -->
-                <div class="flex flex-col gap-1.5">
-                    <label for="cfg-rtsp-port"
-                           class="text-xs text-slate-400 font-medium">RTSP Port</label>
-                    <input id="cfg-rtsp-port"
-                           name="camera_rtsp_port"
-                           type="number"
-                           class="input-cfg"
-                           min="1"
-                           max="65535"
-                           placeholder="554">
-                </div>
-
-                <!-- Username -->
-                <div class="flex flex-col gap-1.5">
-                    <label for="cfg-user"
-                           class="text-xs text-slate-400 font-medium">Username</label>
-                    <input id="cfg-user"
-                           name="camera_user"
-                           type="text"
-                           class="input-cfg"
-                           autocomplete="username">
-                </div>
-
-                <!-- Password — never prefilled; blank preserves existing value -->
-                <div class="flex flex-col gap-1.5">
-                    <label for="cfg-password"
-                           class="text-xs text-slate-400 font-medium">Password</label>
-                    <input id="cfg-password"
-                           name="camera_password"
-                           type="password"
-                           class="input-cfg"
-                           autocomplete="current-password"
-                           placeholder="Leave blank to keep current password">
-                    <p class="text-xs text-slate-600 leading-snug">
-                        Leave blank to keep the existing password.
-                    </p>
-                </div>
-
-                <!-- Channel -->
-                <div class="flex flex-col gap-1.5">
-                    <label for="cfg-channel"
-                           class="text-xs text-slate-400 font-medium">Channel</label>
-                    <input id="cfg-channel"
-                           name="camera_channel"
-                           type="number"
-                           class="input-cfg"
-                           min="1"
-                           placeholder="1">
-                </div>
-
-                <!-- Stream quality -->
-                <div class="flex flex-col gap-1.5">
-                    <label for="cfg-stream"
-                           class="text-xs text-slate-400 font-medium">Stream</label>
-                    <select id="cfg-stream"
-                            name="camera_stream"
-                            class="input-cfg">
-                        <option value="main">Main</option>
-                        <option value="sub">Sub</option>
-                    </select>
-                </div>
-
-                <!-- ONVIF Port -->
-                <div class="flex flex-col gap-1.5">
-                    <label for="cfg-onvif-port"
-                           class="text-xs text-slate-400 font-medium">ONVIF Port</label>
-                    <input id="cfg-onvif-port"
-                           name="camera_onvif_port"
-                           type="number"
-                           class="input-cfg"
-                           min="1"
-                           max="65535"
-                           placeholder="8000">
-                </div>
-
-            </form>
-        </div>
-
-        <!-- Modal footer -->
-        <div class="flex items-center justify-end gap-2 px-5 py-4
-                    border-t border-slate-700 shrink-0">
-            <button type="button"
-                    data-cancel-btn
-                    class="text-xs px-4 py-2 rounded-lg text-slate-400
-                           hover:text-slate-100 transition-colors
-                           focus:outline-none focus:ring-2 focus:ring-sky-500">
-                Cancel
-            </button>
-            <button type="button"
-                    data-save-btn
-                    class="text-xs px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500
-                           text-white font-medium transition-colors
-                           focus:outline-none focus:ring-2 focus:ring-sky-500
-                           focus:ring-offset-2 focus:ring-offset-slate-800
-                           disabled:opacity-50 disabled:cursor-not-allowed">
-                Save
-            </button>
-        </div>
-
+                w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden">
+        <!-- ConfigWidget renders header, body, and footer here -->
+        <div id="config-modal-inner" class="flex flex-col flex-1 min-h-0"></div>
     </div>
 </div>
 
@@ -371,37 +216,97 @@
 <script src="{{ url_for('static', path='js/ptz.js') }}"></script>
 <script src="{{ url_for('static', path='js/config.js') }}"></script>
 <script>
-    // ── Video Stream ────────────────────────────────────────
+    /** Escape a string for safe interpolation into innerHTML. */
+    function escHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    const INITIAL_CAMERA = "{{ active_camera }}";
+
     const stream = new VideoStream({
-        img:     document.getElementById('camera-feed'),
-        overlay: document.getElementById('video-overlay'),
-        fps:     document.getElementById('fps-display'),
-        badge:   document.getElementById('status-badge'),
+        img:        document.getElementById('camera-feed'),
+        overlay:    document.getElementById('video-overlay'),
+        fps:        document.getElementById('fps-display'),
+        badge:      document.getElementById('status-badge'),
+        cameraName: INITIAL_CAMERA,
     });
 
-    // Sync FPS to additional display elements
+    const ptz = initPtz(document.getElementById('ptz-controls'), INITIAL_CAMERA);
+
+    let activeCameraName = INITIAL_CAMERA;
+
+    async function loadCameraSelector() {
+        const res = await fetch('/api/cameras');
+        if (!res.ok) return;
+        const cameras = await res.json();
+        const selector = document.getElementById('camera-selector');
+
+        // Hide the selector when there is only one camera — no meaningful choice to make.
+        selector.classList.toggle('hidden', cameras.length <= 1);
+
+        selector.innerHTML = cameras.map((cam) => `
+            <button type="button"
+                    data-cam="${escHtml(cam.name)}"
+                    class="cam-selector-btn text-xs px-3 py-1 rounded-lg border
+                           border-slate-600 text-slate-300 hover:text-slate-100
+                           hover:border-slate-500 transition-colors focus:outline-none
+                           focus:ring-2 focus:ring-sky-500
+                           ${cam.name === activeCameraName ? 'bg-sky-700 border-sky-600 text-white' : ''}">
+                ${escHtml(cam.name)}
+            </button>
+        `).join('');
+
+        selector.querySelectorAll('[data-cam]').forEach((btn) => {
+            btn.addEventListener('click', () => selectCamera(btn.dataset.cam));
+        });
+    }
+
+    function selectCamera(name) {
+        activeCameraName = name;
+        document.getElementById('active-camera-name').textContent = name;
+        stream.switchCamera(name);
+        ptz.setCameraName(name);
+        // Re-render the selector to reflect the newly active camera.
+        loadCameraSelector();
+    }
+
+    const configWidget = new ConfigWidget('config-modal', {
+        onCamerasChanged: async () => {
+            await loadCameraSelector();
+        },
+        onCameraUpdated: (oldName, newName) => {
+            if (oldName !== activeCameraName) return;
+            activeCameraName = newName;
+            document.getElementById('active-camera-name').textContent = newName;
+            stream.switchCamera(newName);
+            ptz.setCameraName(newName);
+        },
+    });
+
+    document.getElementById('config-btn').addEventListener('click', () => configWidget.open());
+
+    // ── Sync FPS / status to secondary display elements ──────
     const detailFps    = document.getElementById('detail-fps');
     const detailStatus = document.getElementById('detail-status');
     const infoFps      = document.getElementById('info-fps');
+    const labelEl      = document.querySelector('[data-label]');
 
     const observer = new MutationObserver(() => {
         const fps = document.getElementById('fps-display').textContent;
-        if (detailFps)    detailFps.textContent    = fps;
-        if (infoFps)      infoFps.textContent       = fps;
-        if (detailStatus) detailStatus.textContent  =
+        if (detailFps)    detailFps.textContent   = fps;
+        if (infoFps)      infoFps.textContent      = fps;
+        if (detailStatus) detailStatus.textContent =
             document.querySelector('[data-label]')?.textContent ?? '—';
     });
 
     observer.observe(document.getElementById('fps-display'), { childList: true });
-    observer.observe(document.querySelector('[data-label]'),  { childList: true });
+    if (labelEl) observer.observe(labelEl, { childList: true });
 
+    loadCameraSelector();
     stream.connect();
-
-    // ── PTZ Controls ────────────────────────────────────────
-    initPtz(document.getElementById('ptz-controls'));
-
-    // ── Config Widget ────────────────────────────────────────
-    const configWidget = new ConfigWidget('config-modal');
-    document.getElementById('config-btn').addEventListener('click', () => configWidget.open());
 </script>
 {% endblock %}
