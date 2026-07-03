@@ -1,51 +1,49 @@
 /**
- * ConfigWidget — modal for viewing and editing camera configuration.
+ * ConfigWidget — modal for managing multiple camera configurations.
+ *
+ * Renders all modal content dynamically inside #config-modal-inner.
+ * Two views:
+ *   - List view  (default): shows all cameras with Edit / Delete actions.
+ *   - Form view  (add/edit): fields for all camera properties + ONVIF discovery.
  *
  * Public API:
- *   widget.open()     — open modal, fetch current config via GET /api/config
- *   widget.close()    — close modal, restore focus to trigger element
- *   widget.discover() — scan LAN for ONVIF cameras via GET /api/setup/discover
- *   widget.save()     — persist form values via PUT /api/config
+ *   widget.open()   — open modal and show the list view.
+ *   widget.close()  — close modal and restore focus to the trigger element.
  */
 
-const CONFIG_API   = '/api/config';
+const CAMERAS_API  = '/api/cameras';
 const DISCOVER_API = '/api/setup/discover';
 
 class ConfigWidget {
     #modalEl
-    #formEl
-    #discoverSectionEl
-    #discoverListEl
-    #discoverBusyEl
-    #errorEl
-    #saveBtn
-    #discoverBtn
+    #innerEl
+    #onCamerasChanged
+    #onCameraUpdated
     #previousFocusEl = null
+    #editingCamera   = null  // null = creating new; object = editing existing
 
-    constructor(modalId) {
+    /**
+     * @param {string}   modalId
+     * @param {object}   opts
+     * @param {Function} opts.onCamerasChanged  - Called after any add / edit / delete.
+     * @param {Function} opts.onCameraUpdated   - Called after a successful edit with
+     *                                            (oldName, newName). Use to reconnect
+     *                                            streams that target the edited camera.
+     */
+    constructor(modalId, { onCamerasChanged, onCameraUpdated } = {}) {
         this.#modalEl           = document.getElementById(modalId);
-        this.#formEl            = this.#modalEl.querySelector('[data-config-form]');
-        this.#discoverSectionEl = this.#modalEl.querySelector('[data-discover-section]');
-        this.#discoverListEl    = this.#modalEl.querySelector('[data-discover-list]');
-        this.#discoverBusyEl    = this.#modalEl.querySelector('[data-discover-busy]');
-        this.#errorEl           = this.#modalEl.querySelector('[data-config-error]');
-        this.#saveBtn           = this.#modalEl.querySelector('[data-save-btn]');
-        this.#discoverBtn       = this.#modalEl.querySelector('[data-discover-btn]');
-
-        this.#bindEvents();
+        this.#innerEl           = document.getElementById('config-modal-inner');
+        this.#onCamerasChanged  = onCamerasChanged ?? (() => Promise.resolve());
+        this.#onCameraUpdated   = onCameraUpdated  ?? (() => {});
+        this.#bindGlobalEvents();
     }
 
     open() {
         this.#previousFocusEl = document.activeElement;
-        this.#clearError();
-        this.#hideDiscovery();
         this.#modalEl.classList.remove('hidden');
         this.#modalEl.removeAttribute('aria-hidden');
         document.body.style.overflow = 'hidden';
-        requestAnimationFrame(() => {
-            this.#formEl.querySelector('input, select')?.focus();
-        });
-        this.#loadConfig();
+        this.#showListView();
     }
 
     close() {
@@ -56,57 +54,9 @@ class ConfigWidget {
         this.#previousFocusEl = null;
     }
 
-    async discover() {
-        this.#discoverSectionEl.classList.remove('hidden');
-        this.#discoverBusyEl.classList.remove('hidden');
-        this.#discoverListEl.innerHTML = '';
-        this.#discoverBtn.disabled = true;
+    // ── Global event bindings (survive view switches) ────────
 
-        try {
-            const res = await fetch(DISCOVER_API);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const cameras = await res.json();
-            this.#renderDiscoveryResults(cameras);
-        } catch {
-            this.#renderDiscoveryError();
-        } finally {
-            this.#discoverBusyEl.classList.add('hidden');
-            this.#discoverBtn.disabled = false;
-        }
-    }
-
-    async save() {
-        this.#clearError();
-        this.#saveBtn.disabled = true;
-
-        try {
-            const res = await fetch(CONFIG_API, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(this.#collectFormData()),
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            this.close();
-        } catch {
-            this.#showError('Failed to save configuration. Please try again.');
-        } finally {
-            this.#saveBtn.disabled = false;
-        }
-    }
-
-    // ── Private ──────────────────────────────────────────────
-
-    #bindEvents() {
-        this.#modalEl.querySelector('[data-close-btn]')
-            ?.addEventListener('click', () => this.close());
-
-        this.#modalEl.querySelector('[data-cancel-btn]')
-            ?.addEventListener('click', () => this.close());
-
-        this.#saveBtn?.addEventListener('click', () => this.save());
-        this.#discoverBtn?.addEventListener('click', () => this.discover());
-
-        // Close when clicking the dark backdrop (outside the dialog box)
+    #bindGlobalEvents() {
         this.#modalEl.addEventListener('click', (e) => {
             if (e.target === this.#modalEl) this.close();
         });
@@ -118,100 +68,462 @@ class ConfigWidget {
         });
     }
 
-    async #loadConfig() {
+    // ── List view ────────────────────────────────────────────
+
+    async #showListView() {
+        this.#innerEl.innerHTML = this.#buildListShell();
+        this.#innerEl.querySelector('[data-close-btn]')
+            ?.addEventListener('click', () => this.close());
+        this.#innerEl.querySelector('[data-add-btn]')
+            ?.addEventListener('click', () => this.#showFormView(null));
+
+        requestAnimationFrame(() => {
+            this.#innerEl.querySelector('button')?.focus();
+        });
+
+        await this.#loadCameraList();
+    }
+
+    #buildListShell() {
+        return `
+            <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700 shrink-0">
+                <h2 id="config-modal-title"
+                    class="text-sm font-semibold text-slate-100 tracking-tight">
+                    Camera Settings
+                </h2>
+                ${this.#closeButtonHtml()}
+            </div>
+            <div class="overflow-y-auto flex-1 min-h-0 px-5 py-4">
+                <p data-list-error role="alert"
+                   class="hidden text-xs text-red-400 bg-red-950/40 border border-red-900/60
+                          rounded-md px-3 py-2 mb-4"></p>
+                <div data-camera-list aria-live="polite" class="space-y-2">
+                    ${this.#spinnerHtml('Loading cameras…')}
+                </div>
+            </div>
+            <div class="flex items-center justify-end gap-2 px-5 py-4
+                        border-t border-slate-700 shrink-0">
+                <button type="button" data-add-btn
+                        class="text-xs px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500
+                               text-white font-medium transition-colors
+                               focus:outline-none focus:ring-2 focus:ring-sky-500
+                               focus:ring-offset-2 focus:ring-offset-slate-800">
+                    Add camera
+                </button>
+            </div>
+        `;
+    }
+
+    async #loadCameraList() {
+        const listEl  = this.#innerEl.querySelector('[data-camera-list]');
+        const errorEl = this.#innerEl.querySelector('[data-list-error]');
+
         try {
-            const res = await fetch(CONFIG_API);
+            const res = await fetch(CAMERAS_API);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const config = await res.json();
-            this.#fillForm(config);
+            const cameras = await res.json();
+            this.#renderCameraList(cameras, listEl);
         } catch {
-            this.#showError('Could not load configuration.');
+            errorEl?.classList.remove('hidden');
+            if (errorEl) errorEl.textContent = 'Could not load cameras.';
+            if (listEl) listEl.innerHTML = '';
         }
     }
 
-    #fillForm(config) {
-        const f = this.#formEl;
-        f.querySelector('[name="camera_host"]').value       = config.camera_host       ?? '';
-        f.querySelector('[name="camera_rtsp_port"]').value  = config.camera_rtsp_port  ?? '';
-        f.querySelector('[name="camera_user"]').value       = config.camera_user       ?? '';
-        f.querySelector('[name="camera_password"]').value   = '';
-        f.querySelector('[name="camera_channel"]').value    = config.camera_channel    ?? '';
-        f.querySelector('[name="camera_stream"]').value     = config.camera_stream     ?? 'main';
-        f.querySelector('[name="camera_onvif_port"]').value = config.camera_onvif_port ?? '';
+    #renderCameraList(cameras, listEl) {
+        if (!listEl) return;
+
+        if (cameras.length === 0) {
+            listEl.innerHTML =
+                '<p class="text-slate-500 text-sm text-center py-4">No cameras configured yet.</p>';
+            return;
+        }
+
+        listEl.innerHTML = cameras.map((cam) => `
+            <div class="flex items-center justify-between gap-2 py-2.5 px-3
+                        rounded-lg bg-slate-900/50 border border-slate-700">
+                <div class="min-w-0">
+                    <p class="text-sm font-medium text-slate-200 truncate">
+                        ${this.#esc(cam.name)}
+                    </p>
+                    <p class="text-xs text-slate-500 font-mono truncate">
+                        ${this.#esc(cam.host)}
+                    </p>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                    <button type="button"
+                            data-edit-cam="${this.#esc(cam.name)}"
+                            class="text-xs px-2.5 py-1 rounded-md border border-slate-600
+                                   text-slate-300 hover:text-slate-100 hover:border-slate-500
+                                   transition-colors focus:outline-none focus:ring-2
+                                   focus:ring-sky-500">
+                        Edit
+                    </button>
+                    <button type="button"
+                            data-delete-cam="${this.#esc(cam.name)}"
+                            class="text-xs px-2.5 py-1 rounded-md border border-red-900/60
+                                   text-red-400 hover:text-red-300 hover:border-red-800
+                                   transition-colors focus:outline-none focus:ring-2
+                                   focus:ring-red-500">
+                        Delete
+                    </button>
+                </div>
+            </div>
+        `).join('');
+
+        listEl.querySelectorAll('[data-edit-cam]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const cam = cameras.find((c) => c.name === btn.dataset.editCam);
+                if (cam) this.#showFormView(cam);
+            });
+        });
+
+        listEl.querySelectorAll('[data-delete-cam]').forEach((btn) => {
+            btn.addEventListener('click', () => this.#deleteCamera(btn.dataset.deleteCam));
+        });
+    }
+
+    async #deleteCamera(name) {
+        if (!confirm(`Delete camera "${name}"?`)) return;
+
+        const errorEl = this.#innerEl.querySelector('[data-list-error]');
+
+        try {
+            const res = await fetch(`${CAMERAS_API}/${encodeURIComponent(name)}`, {
+                method: 'DELETE',
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            await this.#onCamerasChanged();
+            await this.#loadCameraList();
+        } catch {
+            if (errorEl) {
+                errorEl.textContent = `Failed to delete camera "${name}".`;
+                errorEl.classList.remove('hidden');
+            }
+        }
+    }
+
+    // ── Form view ────────────────────────────────────────────
+
+    #showFormView(camera) {
+        this.#editingCamera = camera;
+        this.#innerEl.innerHTML = this.#buildFormShell(camera);
+
+        this.#innerEl.querySelector('[data-close-btn]')
+            ?.addEventListener('click', () => this.close());
+        this.#innerEl.querySelector('[data-back-btn]')
+            ?.addEventListener('click', () => this.#showListView());
+        this.#innerEl.querySelector('[data-save-btn]')
+            ?.addEventListener('click', () => this.#saveForm());
+        this.#innerEl.querySelector('[data-discover-btn]')
+            ?.addEventListener('click', () => this.#runDiscovery());
+
+        if (camera) this.#fillForm(camera);
+
+        requestAnimationFrame(() => {
+            this.#innerEl.querySelector('input, select')?.focus();
+        });
+    }
+
+    #buildFormShell(camera) {
+        const isNew = camera === null;
+        const title = isNew ? 'Add Camera' : 'Edit Camera';
+
+        return `
+            <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700 shrink-0">
+                <h2 id="config-modal-title"
+                    class="text-sm font-semibold text-slate-100 tracking-tight">
+                    ${title}
+                </h2>
+                ${this.#closeButtonHtml()}
+            </div>
+            <div class="overflow-y-auto flex-1 min-h-0 px-5 py-4">
+                <p data-form-error role="alert"
+                   class="hidden text-xs text-red-400 bg-red-950/40 border border-red-900/60
+                          rounded-md px-3 py-2 mb-4"></p>
+                <form data-config-form novalidate class="space-y-4">
+
+                    <div class="flex flex-col gap-1.5">
+                        <label for="cfg-name"
+                               class="text-xs text-slate-400 font-medium">Name</label>
+                        <input id="cfg-name" name="name" type="text"
+                               class="input-cfg"
+                               placeholder="my-camera"
+                               autocomplete="off"
+                               spellcheck="false">
+                        ${!isNew ? `<p class="text-xs text-slate-600 leading-snug">
+                            Rename requires all connected streams to switch to the new name.
+                        </p>` : ''}
+                    </div>
+
+                    <div class="flex flex-col gap-1.5">
+                        <label for="cfg-host"
+                               class="text-xs text-slate-400 font-medium">Host / IP</label>
+                        <div class="flex gap-2">
+                            <input id="cfg-host" name="host" type="text"
+                                   class="input-cfg flex-1 min-w-0"
+                                   placeholder="192.168.1.x"
+                                   autocomplete="off"
+                                   spellcheck="false">
+                            <button type="button" data-discover-btn
+                                    class="shrink-0 text-xs px-3 py-1.5 rounded-lg
+                                           border border-slate-600 text-slate-300
+                                           hover:text-slate-100 hover:border-slate-500
+                                           transition-colors focus:outline-none focus:ring-2
+                                           focus:ring-sky-500 disabled:opacity-50
+                                           disabled:cursor-not-allowed">
+                                Search
+                            </button>
+                        </div>
+                    </div>
+
+                    <div data-discover-section
+                         class="hidden rounded-lg bg-slate-900/60 border border-slate-700 px-3 py-2">
+                        <p class="text-xs text-slate-500 mb-2 font-medium uppercase tracking-wide">
+                            Found on network
+                        </p>
+                        <div data-discover-busy class="hidden">
+                            <div class="flex items-center gap-2 py-1 text-xs text-slate-400">
+                                <span class="w-3.5 h-3.5 border-2 border-slate-600 border-t-sky-400
+                                             rounded-full animate-spin shrink-0 block"></span>
+                                <span>Searching for cameras on the network…</span>
+                            </div>
+                        </div>
+                        <div data-discover-list aria-live="polite"></div>
+                    </div>
+
+                    <div class="flex flex-col gap-1.5">
+                        <label for="cfg-rtsp-port"
+                               class="text-xs text-slate-400 font-medium">RTSP Port</label>
+                        <input id="cfg-rtsp-port" name="rtsp_port" type="number"
+                               class="input-cfg" min="1" max="65535" placeholder="554">
+                    </div>
+
+                    <div class="flex flex-col gap-1.5">
+                        <label for="cfg-onvif-port"
+                               class="text-xs text-slate-400 font-medium">ONVIF Port</label>
+                        <input id="cfg-onvif-port" name="onvif_port" type="number"
+                               class="input-cfg" min="1" max="65535" placeholder="8000">
+                    </div>
+
+                    <div class="flex flex-col gap-1.5">
+                        <label for="cfg-user"
+                               class="text-xs text-slate-400 font-medium">Username</label>
+                        <input id="cfg-user" name="user" type="text"
+                               class="input-cfg" autocomplete="username">
+                    </div>
+
+                    <div class="flex flex-col gap-1.5">
+                        <label for="cfg-password"
+                               class="text-xs text-slate-400 font-medium">Password</label>
+                        <input id="cfg-password" name="password" type="password"
+                               class="input-cfg" autocomplete="current-password"
+                               placeholder="Leave blank to keep current">
+                        <p class="text-xs text-slate-600 leading-snug">
+                            Leave blank to keep the existing password.
+                        </p>
+                    </div>
+
+                    <div class="flex flex-col gap-1.5">
+                        <label for="cfg-channel"
+                               class="text-xs text-slate-400 font-medium">Channel</label>
+                        <input id="cfg-channel" name="channel" type="number"
+                               class="input-cfg" min="1" placeholder="1">
+                    </div>
+
+                    <div class="flex flex-col gap-1.5">
+                        <label for="cfg-stream"
+                               class="text-xs text-slate-400 font-medium">Stream</label>
+                        <select id="cfg-stream" name="stream" class="input-cfg">
+                            <option value="main">Main</option>
+                            <option value="sub">Sub</option>
+                        </select>
+                    </div>
+
+                </form>
+            </div>
+            <div class="flex items-center justify-between gap-2 px-5 py-4
+                        border-t border-slate-700 shrink-0">
+                <button type="button" data-back-btn
+                        class="text-xs px-4 py-2 rounded-lg text-slate-400
+                               hover:text-slate-100 transition-colors
+                               focus:outline-none focus:ring-2 focus:ring-sky-500">
+                    &larr; Back
+                </button>
+                <button type="button" data-save-btn
+                        class="text-xs px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500
+                               text-white font-medium transition-colors
+                               focus:outline-none focus:ring-2 focus:ring-sky-500
+                               focus:ring-offset-2 focus:ring-offset-slate-800
+                               disabled:opacity-50 disabled:cursor-not-allowed">
+                    Save
+                </button>
+            </div>
+        `;
+    }
+
+    #fillForm(camera) {
+        const f = this.#innerEl.querySelector('[data-config-form]');
+        if (!f) return;
+        f.querySelector('[name="name"]').value       = camera.name       ?? '';
+        f.querySelector('[name="host"]').value       = camera.host       ?? '';
+        f.querySelector('[name="rtsp_port"]').value  = camera.rtsp_port  ?? '';
+        f.querySelector('[name="onvif_port"]').value = camera.onvif_port ?? '';
+        f.querySelector('[name="user"]').value       = camera.user       ?? '';
+        f.querySelector('[name="channel"]').value    = camera.channel    ?? '';
+        f.querySelector('[name="stream"]').value     = camera.stream     ?? 'main';
+        // password is intentionally left blank — backend keeps existing value when empty
     }
 
     #collectFormData() {
-        const f = this.#formEl;
+        const f      = this.#innerEl.querySelector('[data-config-form]');
+        const nameEl = f.querySelector('[name="name"]');
         return {
-            camera_host:       f.querySelector('[name="camera_host"]').value.trim(),
-            camera_rtsp_port:  Number(f.querySelector('[name="camera_rtsp_port"]').value),
-            camera_user:       f.querySelector('[name="camera_user"]').value.trim(),
-            camera_password:   f.querySelector('[name="camera_password"]').value,
-            camera_channel:    Number(f.querySelector('[name="camera_channel"]').value),
-            camera_stream:     f.querySelector('[name="camera_stream"]').value,
-            camera_onvif_port: Number(f.querySelector('[name="camera_onvif_port"]').value),
+            ...(nameEl ? { name: nameEl.value.trim() } : {}),
+            host:       f.querySelector('[name="host"]').value.trim(),
+            rtsp_port:  Number(f.querySelector('[name="rtsp_port"]').value),
+            onvif_port: Number(f.querySelector('[name="onvif_port"]').value),
+            user:       f.querySelector('[name="user"]').value.trim(),
+            password:   f.querySelector('[name="password"]').value,
+            channel:    Number(f.querySelector('[name="channel"]').value),
+            stream:     f.querySelector('[name="stream"]').value,
         };
     }
 
-    #renderDiscoveryResults(cameras) {
+    async #saveForm() {
+        const saveBtn = this.#innerEl.querySelector('[data-save-btn]');
+        const errorEl = this.#innerEl.querySelector('[data-form-error]');
+        errorEl?.classList.add('hidden');
+        if (saveBtn) {
+            saveBtn.disabled = true;
+            saveBtn.classList.add('inline-flex', 'items-center', 'gap-1.5');
+            saveBtn.innerHTML = `
+                <span class="w-3 h-3 border-2 border-white/30 border-t-white
+                             rounded-full animate-spin block shrink-0"></span>
+                <span>Saving…</span>
+            `;
+        }
+
+        const isNew   = this.#editingCamera === null;
+        const oldName = this.#editingCamera?.name ?? null;
+        const data    = this.#collectFormData();
+
+        try {
+            let res;
+            if (isNew) {
+                res = await fetch(CAMERAS_API, {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify(data),
+                });
+            } else {
+                res = await fetch(
+                    `${CAMERAS_API}/${encodeURIComponent(oldName)}`,
+                    {
+                        method:  'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body:    JSON.stringify(data),
+                    }
+                );
+            }
+
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            await this.#onCamerasChanged();
+            if (!isNew) this.#onCameraUpdated(oldName, data.name);
+            this.#showListView();
+        } catch {
+            if (errorEl) {
+                errorEl.textContent = 'Failed to save. Please try again.';
+                errorEl.classList.remove('hidden');
+            }
+        } finally {
+            if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.classList.remove('inline-flex', 'items-center', 'gap-1.5');
+                saveBtn.innerHTML = 'Save';
+            }
+        }
+    }
+
+    // ── ONVIF discovery ──────────────────────────────────────
+
+    async #runDiscovery() {
+        const section    = this.#innerEl.querySelector('[data-discover-section]');
+        const busyEl     = this.#innerEl.querySelector('[data-discover-busy]');
+        const listEl     = this.#innerEl.querySelector('[data-discover-list]');
+        const discoverBtn = this.#innerEl.querySelector('[data-discover-btn]');
+
+        if (!section) return;
+
+        section.classList.remove('hidden');
+        busyEl?.classList.remove('hidden');
+        if (listEl) listEl.innerHTML = '';
+        if (discoverBtn) discoverBtn.disabled = true;
+
+        try {
+            const res = await fetch(DISCOVER_API);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const cameras = await res.json();
+            this.#renderDiscoveryResults(cameras, listEl);
+        } catch {
+            if (listEl) {
+                listEl.innerHTML =
+                    '<p class="text-red-400 text-sm text-center py-2">Discovery failed. Check network connectivity.</p>';
+            }
+        } finally {
+            busyEl?.classList.add('hidden');
+            if (discoverBtn) discoverBtn.disabled = false;
+        }
+    }
+
+    #renderDiscoveryResults(cameras, listEl) {
+        if (!listEl) return;
+
         if (cameras.length === 0) {
-            this.#discoverListEl.innerHTML =
+            listEl.innerHTML =
                 '<p class="text-slate-500 text-sm text-center py-2">No cameras found on the network.</p>';
             return;
         }
 
-        this.#discoverListEl.innerHTML = cameras
-            .map((cam) => `
-                <div class="flex items-center justify-between gap-2 py-2
-                            border-b border-slate-700 last:border-0">
-                    <div class="min-w-0">
-                        <p class="text-sm font-mono text-slate-200 truncate">${this.#esc(cam.host)}</p>
-                        <p class="text-xs text-slate-500 truncate">${this.#esc(cam.name)}</p>
-                    </div>
-                    <button type="button"
-                            class="shrink-0 text-xs px-2.5 py-1 rounded-md bg-sky-700
-                                   hover:bg-sky-600 text-white transition-colors
-                                   focus:outline-none focus:ring-2 focus:ring-sky-500"
-                            data-use-host="${this.#esc(cam.host)}">
-                        Use
-                    </button>
+        listEl.innerHTML = cameras.map((cam) => `
+            <div class="flex items-center justify-between gap-2 py-2
+                        border-b border-slate-700 last:border-0">
+                <div class="min-w-0">
+                    <p class="text-sm font-mono text-slate-200 truncate">
+                        ${this.#esc(cam.host)}
+                    </p>
+                    <p class="text-xs text-slate-500 truncate">
+                        ${this.#esc(cam.name)}
+                    </p>
                 </div>
-            `)
-            .join('');
+                <button type="button"
+                        class="shrink-0 text-xs px-2.5 py-1 rounded-md bg-sky-700
+                               hover:bg-sky-600 text-white transition-colors
+                               focus:outline-none focus:ring-2 focus:ring-sky-500"
+                        data-use-host="${this.#esc(cam.host)}">
+                    Use
+                </button>
+            </div>
+        `).join('');
 
-        this.#discoverListEl.querySelectorAll('[data-use-host]').forEach((btn) => {
+        listEl.querySelectorAll('[data-use-host]').forEach((btn) => {
             btn.addEventListener('click', () => {
-                this.#formEl.querySelector('[name="camera_host"]').value = btn.dataset.useHost;
+                const hostInput = this.#innerEl.querySelector('[name="host"]');
+                if (hostInput) hostInput.value = btn.dataset.useHost;
             });
         });
     }
 
-    #renderDiscoveryError() {
-        this.#discoverListEl.innerHTML =
-            '<p class="text-red-400 text-sm text-center py-2">Discovery failed. Check network connectivity.</p>';
-    }
-
-    #hideDiscovery() {
-        this.#discoverSectionEl.classList.add('hidden');
-        this.#discoverListEl.innerHTML = '';
-    }
-
-    #showError(message) {
-        this.#errorEl.textContent = message;
-        this.#errorEl.classList.remove('hidden');
-    }
-
-    #clearError() {
-        this.#errorEl.textContent = '';
-        this.#errorEl.classList.add('hidden');
-    }
+    // ── Accessibility ────────────────────────────────────────
 
     #trapFocus(e) {
         if (e.key !== 'Tab') return;
 
-        const focusable = [...this.#modalEl.querySelectorAll(
+        const focusable = [...this.#innerEl.querySelectorAll(
             'button:not([disabled]), input:not([disabled]), select:not([disabled])'
         )].filter((el) => el.closest('.hidden') === null);
+
+        if (focusable.length === 0) return;
 
         const first = focusable[0];
         const last  = focusable[focusable.length - 1];
@@ -225,7 +537,36 @@ class ConfigWidget {
         }
     }
 
-    // Prevent XSS when interpolating camera names / hosts into innerHTML
+    // ── Helpers ──────────────────────────────────────────────
+
+    #closeButtonHtml() {
+        return `
+            <button type="button" data-close-btn aria-label="Close settings"
+                    class="flex items-center justify-center w-7 h-7 rounded-md
+                           text-slate-400 hover:text-slate-100 hover:bg-slate-700
+                           transition-colors focus:outline-none focus:ring-2
+                           focus:ring-sky-500">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" class="w-4 h-4 pointer-events-none">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        `;
+    }
+
+    #spinnerHtml(label) {
+        return `
+            <div class="flex items-center justify-center gap-2 py-4 text-slate-500 text-sm">
+                <span class="w-4 h-4 border-2 border-slate-600 border-t-sky-400
+                             rounded-full animate-spin block shrink-0"></span>
+                ${this.#esc(label)}
+            </div>
+        `;
+    }
+
+    /** Prevent XSS when interpolating user-controlled strings into innerHTML. */
     #esc(str) {
         return String(str)
             .replace(/&/g, '&amp;')
