@@ -27,7 +27,8 @@ ENV/
 # =============================================================================
 .env
 .env.*
-!.env.example
+config.toml
+!config.toml.example
 *.pem
 *.key
 *.crt

@@ -1,0 +1,16 @@
+[app]
+host = "0.0.0.0"
+port = 8080
+debug = false
+
+[[cameras]]
+name = "office12"
+host = "192.168.1.100"
+rtsp_port = 554
+onvif_port = 80
+user = "admin"
+password = "changeme"
+channel = 1
+stream = "main"
+
+# Add a key [[cameras]] more for each additional cam.
