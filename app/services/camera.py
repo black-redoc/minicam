@@ -23,6 +23,8 @@ _RTSP_OPTIONS: dict[str, str] = {
 }
 _RECONNECT_DELAY_SECONDS = 2.0
 _STOP_TIMEOUT_SECONDS = 10.0
+_STALL_TIMEOUT_SECONDS = 15.0
+_WATCHDOG_INTERVAL_SECONDS = 3.0
 
 
 class RTSPCamera:
@@ -44,6 +46,9 @@ class RTSPCamera:
         self._sequence = 0
         self._container: av.container.InputContainer | None = None
         self._thread: threading.Thread | None = None
+        self._container_lock = threading.Lock()
+        self._last_packet_time = 0.0
+        self._watchdog_thread: threading.Thread | None = None
 
     def start(self) -> None:
         """Start the RTSP capture loop in a background thread."""
@@ -56,17 +61,18 @@ class RTSPCamera:
             daemon=True,
         )
         self._thread.start()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            name="rtsp_watchdog",
+            daemon=True,
+        )
+        self._watchdog_thread.start()
 
     def stop(self) -> None:
         """Stop the capture loop and release all resources."""
         self._running = False
 
-        container = self._container
-        if container is not None:
-            try:
-                container.close()
-            except Exception:
-                pass
+        self._close_container()
 
         if self._thread is not None:
             self._thread.join(timeout=_STOP_TIMEOUT_SECONDS)
@@ -77,11 +83,31 @@ class RTSPCamera:
                 )
             self._thread = None
 
+        if self._watchdog_thread is not None:
+            self._watchdog_thread.join(timeout=_STOP_TIMEOUT_SECONDS)
+            if self._watchdog_thread.is_alive():
+                logger.warning(
+                    "Watchdog thread did not stop within %.1f seconds",
+                    _STOP_TIMEOUT_SECONDS,
+                )
+            self._watchdog_thread = None
+
         self._connected = False
 
     def is_connected(self) -> bool:
         """Return True if currently receiving frames from the camera."""
         return self._connected
+
+    def _close_container(self) -> None:
+        """Close and clear the active container, tolerating a concurrent close."""
+        with self._container_lock:
+            container = self._container
+            self._container = None
+        if container is not None:
+            try:
+                container.close()
+            except Exception:
+                pass
 
     def _capture_loop(self) -> None:
         """Reconnect on failure until stop() is called.
@@ -120,7 +146,8 @@ class RTSPCamera:
         if not self._running:
             return
 
-        self._container = av.open(self._rtsp_url, options=_RTSP_OPTIONS)
+        with self._container_lock:
+            self._container = av.open(self._rtsp_url, options=_RTSP_OPTIONS)
 
         try:
             video_stream = next(
@@ -137,9 +164,11 @@ class RTSPCamera:
             video_stream.codec_context.thread_type = "SLICE"
             video_stream.codec_context.thread_count = 2
             self._connected = True
+            self._last_packet_time = time.monotonic()
             logger.info("RTSP stream opened: %s", self._rtsp_url)
 
             for packet in self._container.demux(video_stream):
+                self._last_packet_time = time.monotonic()
                 if not self._running:
                     break
                 for av_frame in packet.decode():
@@ -149,11 +178,24 @@ class RTSPCamera:
                     self._sequence += 1
                     self._buffer.write(frame)
         finally:
-            container = self._container
-            if container is not None:
-                try:
-                    container.close()
-                except Exception:
-                    pass
-                self._container = None
+            self._close_container()
             self._connected = False
+
+    def _watchdog_tick(self) -> None:
+        """Force a reconnect if no RTSP packets have arrived recently."""
+        if not self._connected:
+            return
+        stalled_for = time.monotonic() - self._last_packet_time
+        if stalled_for > _STALL_TIMEOUT_SECONDS:
+            logger.warning(
+                "No RTSP packets from %s in %.1fs, forcing reconnect",
+                self._rtsp_url,
+                stalled_for,
+            )
+            self._close_container()
+
+    def _watchdog_loop(self) -> None:
+        while self._running:
+            time.sleep(_WATCHDOG_INTERVAL_SECONDS)
+            if self._running:
+                self._watchdog_tick()

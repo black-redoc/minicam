@@ -83,6 +83,27 @@ class TestRTSPCameraFrameCapture:
         time.sleep(0.05)
         assert buf.read() is not None
 
+    def test_capture_stream_updates_last_packet_time(self) -> None:
+        cam, _ = _make_camera()
+        cam._running = True
+
+        mock_av_frame = make_mock_av_frame()
+        mock_packet = MagicMock()
+        mock_packet.decode.return_value = [mock_av_frame]
+
+        mock_video_stream = MagicMock()
+        mock_video_stream.type = "video"
+        mock_video_stream.codec_context = MagicMock()
+
+        mock_container = MagicMock()
+        mock_container.streams = [mock_video_stream]
+        mock_container.demux.return_value = [mock_packet]
+
+        with patch("app.services.camera.av.open", return_value=mock_container):
+            cam._capture_stream()
+
+        assert cam._last_packet_time > 0.0
+
 
 class TestRTSPCameraEdgeCases:
     def test_capture_stream_returns_early_when_not_running(self) -> None:
@@ -105,6 +126,15 @@ class TestRTSPCameraEdgeCases:
         mock_thread.is_alive.return_value = True
         cam._thread = mock_thread
         cam.stop()  # should not raise
+
+    def test_stop_logs_warning_when_watchdog_does_not_stop(self) -> None:
+        cam, _ = _make_camera()
+        mock_watchdog = MagicMock(spec=["join", "is_alive"])
+        mock_watchdog.is_alive.return_value = True
+        cam._watchdog_thread = mock_watchdog
+        cam.stop()  # should not raise
+        mock_watchdog.join.assert_called_once_with(timeout=10.0)
+        assert cam._watchdog_thread is None
 
     def test_capture_stream_finally_handles_container_close_exception(self) -> None:
         cam, _ = _make_camera()
@@ -135,6 +165,54 @@ class TestRTSPCameraEdgeCases:
             cam._capture_stream()
 
         original_flags.__ior__.assert_called_once_with(Flags.low_delay)
+
+
+class TestCloseContainer:
+    def test_close_container_idempotent_when_already_none(self) -> None:
+        cam, _ = _make_camera()
+        cam._container = None
+        cam._close_container()  # should not raise
+        assert cam._container is None
+
+    def test_close_container_tolerates_close_exception(self) -> None:
+        cam, _ = _make_camera()
+        mock_container = MagicMock()
+        mock_container.close.side_effect = RuntimeError("close failed")
+        cam._container = mock_container
+        cam._close_container()  # should not raise
+        assert cam._container is None
+        mock_container.close.assert_called_once()
+
+
+class TestWatchdog:
+    def test_watchdog_tick_does_nothing_when_not_connected(self) -> None:
+        cam, _ = _make_camera()
+        cam._connected = False
+        mock_container = MagicMock()
+        cam._container = mock_container
+        cam._watchdog_tick()
+        mock_container.close.assert_not_called()
+        assert cam._container is mock_container
+
+    def test_watchdog_tick_does_nothing_when_packet_recent(self) -> None:
+        cam, _ = _make_camera()
+        cam._connected = True
+        cam._last_packet_time = time.monotonic()
+        mock_container = MagicMock()
+        cam._container = mock_container
+        cam._watchdog_tick()
+        mock_container.close.assert_not_called()
+        assert cam._container is mock_container
+
+    def test_watchdog_tick_forces_close_when_stalled(self) -> None:
+        cam, _ = _make_camera()
+        cam._connected = True
+        cam._last_packet_time = time.monotonic() - 20.0
+        mock_container = MagicMock()
+        cam._container = mock_container
+        cam._watchdog_tick()
+        mock_container.close.assert_called_once()
+        assert cam._container is None
 
 
 class TestRTSPOptions:
