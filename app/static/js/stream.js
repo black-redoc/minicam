@@ -60,6 +60,7 @@ class VideoStream {
      */
     switchCamera(name) {
         clearTimeout(this.#reconnectTimer);
+        this.#overlay.classList.remove('hidden');
         this.#cameraName = name;
         if (this.#ws) {
             this.#ws.onclose = null;

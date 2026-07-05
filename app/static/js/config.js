@@ -19,6 +19,8 @@ class ConfigWidget {
     #innerEl
     #onCamerasChanged
     #onCameraUpdated
+    #onCameraSelected
+    #getActiveCamera
     #previousFocusEl = null
     #editingCamera   = null  // null = creating new; object = editing existing
 
@@ -29,12 +31,19 @@ class ConfigWidget {
      * @param {Function} opts.onCameraUpdated   - Called after a successful edit with
      *                                            (oldName, newName). Use to reconnect
      *                                            streams that target the edited camera.
+     * @param {Function} opts.onCameraSelected  - Called with (name) when the user picks
+     *                                            a camera from the list. Widget closes
+     *                                            itself right after.
+     * @param {Function} opts.getActiveCamera   - Returns the name of the currently active
+     *                                            camera, used to highlight it in the list.
      */
-    constructor(modalId, { onCamerasChanged, onCameraUpdated } = {}) {
+    constructor(modalId, { onCamerasChanged, onCameraUpdated, onCameraSelected, getActiveCamera } = {}) {
         this.#modalEl           = document.getElementById(modalId);
         this.#innerEl           = document.getElementById('config-modal-inner');
-        this.#onCamerasChanged  = onCamerasChanged ?? (() => Promise.resolve());
-        this.#onCameraUpdated   = onCameraUpdated  ?? (() => {});
+        this.#onCamerasChanged  = onCamerasChanged  ?? (() => Promise.resolve());
+        this.#onCameraUpdated   = onCameraUpdated   ?? (() => {});
+        this.#onCameraSelected  = onCameraSelected  ?? (() => {});
+        this.#getActiveCamera   = getActiveCamera   ?? (() => null);
         this.#bindGlobalEvents();
     }
 
@@ -139,14 +148,27 @@ class ConfigWidget {
             return;
         }
 
-        listEl.innerHTML = cameras.map((cam) => `
+        const activeName = this.#getActiveCamera();
+
+        listEl.innerHTML = cameras.map((cam) => {
+            const isActive = cam.name === activeName;
+            return `
             <div class="flex items-center justify-between gap-2 py-2.5 px-3
-                        rounded-lg bg-slate-900/50 border border-slate-700">
+                        rounded-lg border cursor-pointer transition-colors
+                        focus:outline-none focus:ring-2 focus:ring-sky-500
+                        ${isActive
+                            ? 'bg-sky-700 border-sky-600 text-white'
+                            : 'bg-slate-900/50 border-slate-700 hover:bg-slate-800/70 hover:border-slate-600'}"
+                 data-select-cam="${this.#esc(cam.name)}"
+                 role="button"
+                 tabindex="0"
+                 aria-pressed="${isActive}"
+                 aria-label="Select camera ${this.#esc(cam.name)}${isActive ? ', currently active' : ''}">
                 <div class="min-w-0">
-                    <p class="text-sm font-medium text-slate-200 truncate">
+                    <p class="text-sm font-medium truncate ${isActive ? 'text-white' : 'text-slate-200'}">
                         ${this.#esc(cam.name)}
                     </p>
-                    <p class="text-xs text-slate-500 font-mono truncate">
+                    <p class="text-xs font-mono truncate ${isActive ? 'text-sky-100/80' : 'text-slate-500'}">
                         ${this.#esc(cam.host)}
                     </p>
                 </div>
@@ -169,17 +191,36 @@ class ConfigWidget {
                     </button>
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
+
+        listEl.querySelectorAll('[data-select-cam]').forEach((el) => {
+            el.addEventListener('click', () => {
+                this.#onCameraSelected(el.dataset.selectCam);
+                this.close();
+            });
+            el.addEventListener('keydown', (e) => {
+                if (e.target !== el) return;
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                this.#onCameraSelected(el.dataset.selectCam);
+                this.close();
+            });
+        });
 
         listEl.querySelectorAll('[data-edit-cam]').forEach((btn) => {
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
                 const cam = cameras.find((c) => c.name === btn.dataset.editCam);
                 if (cam) this.#showFormView(cam);
             });
         });
 
         listEl.querySelectorAll('[data-delete-cam]').forEach((btn) => {
-            btn.addEventListener('click', () => this.#deleteCamera(btn.dataset.deleteCam));
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.#deleteCamera(btn.dataset.deleteCam);
+            });
         });
     }
 
@@ -520,7 +561,7 @@ class ConfigWidget {
         if (e.key !== 'Tab') return;
 
         const focusable = [...this.#innerEl.querySelectorAll(
-            'button:not([disabled]), input:not([disabled]), select:not([disabled])'
+            'button:not([disabled]), input:not([disabled]), select:not([disabled]), [data-select-cam]'
         )].filter((el) => el.closest('.hidden') === null);
 
         if (focusable.length === 0) return;

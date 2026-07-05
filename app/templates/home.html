@@ -16,9 +16,6 @@
         <span class="text-sky-400 font-bold tracking-tight text-base">minicam</span>
     </div>
 
-    <!-- Camera selector — populated by JS; hidden when only one camera is present -->
-    <div id="camera-selector" class="flex items-center gap-1"></div>
-
     <div class="flex items-center gap-3">
         <span id="fps-display"
               class="hidden sm:inline text-xs text-slate-400 font-mono tabular-nums">
@@ -216,15 +213,6 @@
 <script src="{{ url_for('static', path='js/ptz.js') }}"></script>
 <script src="{{ url_for('static', path='js/config.js') }}"></script>
 <script>
-    /** Escape a string for safe interpolation into innerHTML. */
-    function escHtml(str) {
-        return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
-    }
-
     const INITIAL_CAMERA = "{{ active_camera }}";
 
     const stream = new VideoStream({
@@ -239,46 +227,17 @@
 
     let activeCameraName = INITIAL_CAMERA;
 
-    async function loadCameraSelector() {
-        const res = await fetch('/api/cameras');
-        if (!res.ok) return;
-        const cameras = await res.json();
-        const selector = document.getElementById('camera-selector');
-
-        // Hide the selector when there is only one camera — no meaningful choice to make.
-        selector.classList.toggle('hidden', cameras.length <= 1);
-
-        selector.innerHTML = cameras.map((cam) => `
-            <button type="button"
-                    data-cam="${escHtml(cam.name)}"
-                    class="cam-selector-btn text-xs px-3 py-1 rounded-lg border
-                           border-slate-600 text-slate-300 hover:text-slate-100
-                           hover:border-slate-500 transition-colors focus:outline-none
-                           focus:ring-2 focus:ring-sky-500
-                           ${cam.name === activeCameraName ? 'bg-sky-700 border-sky-600 text-white' : ''}">
-                ${escHtml(cam.name)}
-            </button>
-        `).join('');
-
-        selector.querySelectorAll('[data-cam]').forEach((btn) => {
-            btn.addEventListener('click', () => selectCamera(btn.dataset.cam));
-        });
-    }
-
     function selectCamera(name) {
         activeCameraName = name;
         document.getElementById('active-camera-name').textContent = name;
         stream.switchCamera(name);
         ptz.setCameraName(name);
-        // Re-render the selector to reflect the newly active camera.
-        loadCameraSelector();
     }
 
     const configWidget = new ConfigWidget('config-modal', {
-        onCamerasChanged: async () => {
-            await loadCameraSelector();
-        },
-        onCameraUpdated: (oldName, newName) => {
+        getActiveCamera:  () => activeCameraName,
+        onCameraSelected: (name) => selectCamera(name),
+        onCameraUpdated:  (oldName, newName) => {
             if (oldName !== activeCameraName) return;
             activeCameraName = newName;
             document.getElementById('active-camera-name').textContent = newName;
@@ -306,7 +265,6 @@
     observer.observe(document.getElementById('fps-display'), { childList: true });
     if (labelEl) observer.observe(labelEl, { childList: true });
 
-    loadCameraSelector();
     stream.connect();
 </script>
 {% endblock %}
