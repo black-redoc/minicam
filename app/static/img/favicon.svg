@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- AI scan ring -->
+  <circle cx="16" cy="16" r="13" fill="none" stroke="#0ea5e9" stroke-width="1.5" stroke-dasharray="3 4" opacity="0.35"/>
+
+  <!-- Camera body ring -->
+  <circle cx="16" cy="16" r="9.5" fill="none" stroke="#334155" stroke-width="1.5"/>
+
+  <!-- Lens -->
+  <circle cx="16" cy="16" r="6" fill="#0f172a" stroke="#0ea5e9" stroke-width="1.5"/>
+
+  <!-- AI-active pupil -->
+  <circle cx="16" cy="16" r="3" fill="#0ea5e9"/>
+
+  <!-- Lens reflection -->
+  <circle cx="14" cy="14" r="1" fill="#ffffff" opacity="0.5"/>
+</svg>
