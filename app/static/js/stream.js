@@ -33,6 +33,12 @@ class VideoStream {
     }
 
     connect() {
+        if (this.#ws) {
+            this.#ws.onclose = null;
+            this.#ws.close();
+            this.#ws = null;
+        }
+
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const url   = `${proto}//${location.host}/ws/stream/${encodeURIComponent(this.#cameraName)}`;
 
@@ -48,7 +54,11 @@ class VideoStream {
 
     disconnect() {
         clearTimeout(this.#reconnectTimer);
-        this.#ws?.close();
+        if (this.#ws) {
+            this.#ws.onclose = null;
+            this.#ws.close();
+            this.#ws = null;
+        }
     }
 
     /**
@@ -89,7 +99,7 @@ class VideoStream {
 
         this.#frameCount++;
         const now = performance.now();
-        if (now - this.#fpsTimestamp >= 1000) {
+        if (this.#fpsEl && now - this.#fpsTimestamp >= 1000) {
             this.#fpsEl.textContent = `${this.#frameCount} FPS`;
             this.#frameCount        = 0;
             this.#fpsTimestamp      = now;
@@ -107,6 +117,7 @@ class VideoStream {
     }
 
     #setStatus(state, label) {
+        if (!this.#badgeEl) return;
         this.#badgeEl.className = `badge badge--${state}`;
         this.#badgeEl.querySelector('[data-label]').textContent = label;
     }
