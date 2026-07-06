@@ -86,7 +86,7 @@
      ═══════════════════════════════════════════════════════════ -->
 <main class="p-4 md:p-6 max-w-7xl mx-auto w-full">
 
-<div id="single-view" class="flex flex-col md:flex-row gap-4">
+<div id="single-view" class="hidden flex flex-col md:flex-row gap-4">
 
     <!-- ── Video Column ──────────────────────────────────────── -->
     <section class="flex-1 min-w-0 flex flex-col gap-3">
@@ -213,6 +213,10 @@
 
 <div id="grid-view" class="hidden"></div>
 
+<div id="page-loader">
+    <div class="video-spinner"></div>
+</div>
+
 </main>
 
 <!-- ═══════════════════════════════════════════════════════════
@@ -290,17 +294,35 @@
     observer.observe(document.getElementById('fps-display'), { childList: true });
     if (labelEl) observer.observe(labelEl, { childList: true });
 
-    stream.connect();
-
     // ── Grid view ─────────────────────────────────────────────
     const gridWidget = new GridWidget(document.getElementById('grid-view'));
     let gridMode = false;
 
+    function fadeIn(el) {
+        el.classList.remove('hidden');
+        el.classList.remove('view-fade-in');
+        void el.offsetWidth;
+        el.classList.add('view-fade-in');
+    }
+
+    function hideLoader() {
+        const loader = document.getElementById('page-loader');
+        loader.classList.add('fading');
+        loader.addEventListener('transitionend', () => loader.classList.add('hidden'), { once: true });
+    }
+
     async function syncGridBtn() {
         const res = await fetch('/api/cameras');
-        if (!res.ok) return;
+        hideLoader();
+        if (!res.ok) { fadeIn(document.getElementById('single-view')); stream.connect(); return; }
         const cameras = await res.json();
         document.getElementById('grid-btn').classList.toggle('hidden', cameras.length < 2);
+        if (cameras.length >= 2) {
+            enterGrid();
+        } else {
+            fadeIn(document.getElementById('single-view'));
+            stream.connect();
+        }
     }
 
     async function enterGrid() {
@@ -309,7 +331,7 @@
         document.getElementById('status-badge').classList.add('hidden');
         stream.disconnect();
         document.getElementById('single-view').classList.add('hidden');
-        document.getElementById('grid-view').classList.remove('hidden');
+        fadeIn(document.getElementById('grid-view'));
         const res = await fetch('/api/cameras');
         if (!res.ok) return;
         const cameras = await res.json();
@@ -334,7 +356,7 @@
         document.getElementById('status-badge').classList.remove('hidden');
         gridWidget.unmount();
         document.getElementById('grid-view').classList.add('hidden');
-        document.getElementById('single-view').classList.remove('hidden');
+        fadeIn(document.getElementById('single-view'));
         if (switchToName && switchToName !== activeCameraName) {
             selectCamera(switchToName);
         } else {
