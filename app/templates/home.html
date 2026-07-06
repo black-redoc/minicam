@@ -25,6 +25,25 @@
             <span data-label>Connecting…</span>
         </span>
 
+        <!-- Grid view toggle -->
+        <button id="grid-btn"
+                type="button"
+                aria-label="Toggle grid view"
+                title="Grid view"
+                class="hidden flex items-center justify-center w-8 h-8 rounded-lg
+                       text-slate-400 hover:text-slate-100 hover:bg-slate-800
+                       transition-colors focus:outline-none focus:ring-2
+                       focus:ring-sky-500 focus:ring-offset-1 focus:ring-offset-slate-900">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" class="w-4 h-4 pointer-events-none">
+                <rect x="3" y="3" width="7" height="7"/>
+                <rect x="14" y="3" width="7" height="7"/>
+                <rect x="3" y="14" width="7" height="7"/>
+                <rect x="14" y="14" width="7" height="7"/>
+            </svg>
+        </button>
+
         <!-- Docs link -->
         <a href="/doc/"
            aria-label="Open documentation"
@@ -65,8 +84,9 @@
      mobile: single column
      md+:    video left │ controls right
      ═══════════════════════════════════════════════════════════ -->
-<main class="flex flex-col md:flex-row gap-4 p-4 md:p-6 max-w-7xl mx-auto w-full">
+<main class="p-4 md:p-6 max-w-7xl mx-auto w-full">
 
+<div id="single-view" class="flex flex-col md:flex-row gap-4">
 
     <!-- ── Video Column ──────────────────────────────────────── -->
     <section class="flex-1 min-w-0 flex flex-col gap-3">
@@ -189,6 +209,10 @@
 
     </aside>
 
+</div><!-- /#single-view -->
+
+<div id="grid-view" class="hidden"></div>
+
 </main>
 
 <!-- ═══════════════════════════════════════════════════════════
@@ -212,6 +236,7 @@
 <script src="{{ url_for('static', path='js/stream.js') }}"></script>
 <script src="{{ url_for('static', path='js/ptz.js') }}"></script>
 <script src="{{ url_for('static', path='js/config.js') }}"></script>
+<script src="{{ url_for('static', path='js/grid.js') }}"></script>
 <script>
     const INITIAL_CAMERA = "{{ active_camera }}";
 
@@ -266,5 +291,61 @@
     if (labelEl) observer.observe(labelEl, { childList: true });
 
     stream.connect();
+
+    // ── Grid view ─────────────────────────────────────────────
+    const gridWidget = new GridWidget(document.getElementById('grid-view'));
+    let gridMode = false;
+
+    async function syncGridBtn() {
+        const res = await fetch('/api/cameras');
+        if (!res.ok) return;
+        const cameras = await res.json();
+        document.getElementById('grid-btn').classList.toggle('hidden', cameras.length < 2);
+    }
+
+    async function enterGrid() {
+        gridMode = true;
+        document.getElementById('grid-btn').classList.add('bg-slate-700', 'text-slate-100');
+        stream.disconnect();
+        document.getElementById('single-view').classList.add('hidden');
+        document.getElementById('grid-view').classList.remove('hidden');
+        const res = await fetch('/api/cameras');
+        if (!res.ok) return;
+        const cameras = await res.json();
+        gridWidget.mount(cameras);
+    }
+
+    function exitGrid(switchToName = null) {
+        // Snapshot the last rendered frame from the target camera's grid cell so
+        // the single-view <img> shows it immediately — no blank flash during reconnect.
+        const targetName = switchToName ?? activeCameraName;
+        const cell = document.querySelector(`[data-grid-cam="${CSS.escape(targetName)}"]`);
+        if (cell) {
+            const gridImg = cell.querySelector('img');
+            if (gridImg?.src?.startsWith('blob:')) {
+                document.getElementById('camera-feed').src = gridImg.src;
+                document.getElementById('video-overlay').classList.add('hidden');
+            }
+        }
+
+        gridMode = false;
+        document.getElementById('grid-btn').classList.remove('bg-slate-700', 'text-slate-100');
+        gridWidget.unmount();
+        document.getElementById('grid-view').classList.add('hidden');
+        document.getElementById('single-view').classList.remove('hidden');
+        if (switchToName && switchToName !== activeCameraName) {
+            selectCamera(switchToName);
+        } else {
+            stream.connect();
+        }
+    }
+
+    document.getElementById('grid-btn').addEventListener('click', () => {
+        gridMode ? exitGrid() : enterGrid();
+    });
+
+    document.addEventListener('grid:select', (e) => exitGrid(e.detail.name));
+
+    syncGridBtn();
 </script>
 {% endblock %}
