@@ -200,6 +200,15 @@
     50%       { opacity: 0.3; }
 }
 
+.dot-glow {
+    animation: dot-glow 2.4s ease-in-out infinite;
+}
+
+@keyframes dot-glow {
+    0%, 100% { box-shadow: 0 0 8px 2px #38bdf8; }
+    50%       { box-shadow: 0 0 2px 0px rgba(56, 189, 248, 0.15); }
+}
+
 /* ============================================================
    Config form — input / select shared style
    Extracted to avoid repeating the same class list across 7 fields.

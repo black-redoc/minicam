@@ -52,7 +52,8 @@ class GridWidget {
                 overlayEl.classList.add('hidden');
             }
 
-            const stream = new VideoStream({ img: imgEl, overlay: overlayEl, cameraName: cam.name });
+            const badgeEl   = this.#container.querySelector(`#grid-badge-${i}`);
+            const stream = new VideoStream({ img: imgEl, overlay: overlayEl, badge: badgeEl, cameraName: cam.name });
             stream.connect();
             this.#streams.set(cam.name, stream);
         });
@@ -112,8 +113,12 @@ class GridWidget {
                 </div>
                 <div class="absolute bottom-0 left-0 right-0
                             bg-gradient-to-t from-black/70 to-transparent
-                            px-2 py-1.5 pointer-events-none">
-                    <span class="text-white text-xs font-mono truncate block">${name}</span>
+                            px-2 py-1.5 pointer-events-none
+                            flex items-center justify-between gap-2">
+                    <span class="text-white text-xs font-mono truncate">${name}</span>
+                    <span id="grid-badge-${i}" class="badge badge--connecting shrink-0">
+                        <span data-label>Connecting…</span>
+                    </span>
                 </div>
             </div>
         `;
