@@ -59,6 +59,7 @@ def _start_camera_and_ptz(cam_config: CameraConfig) -> None:
     buf = state.frame_buffers.get(cam_config.name)
     if buf is None:
         from app.buffers.double_frame_buffer import DoubleFrameBuffer
+
         buf = DoubleFrameBuffer()
         state.frame_buffers[cam_config.name] = buf
 

@@ -27,6 +27,14 @@ _STOP_TIMEOUT_SECONDS = 10.0
 _OPEN_TIMEOUT_SECONDS = 5.0
 _STALL_TIMEOUT_SECONDS = 15.0
 
+# Shared across every RTSPCamera instance/thread: PyAV/FFmpeg's container
+# open/close is not thread-safe even across unrelated streams — concurrent
+# av.open()/close() calls from different capture threads corrupted the
+# process heap in production. Demux/decode of an already-open container is
+# unaffected and still runs fully in parallel; only the open/close sequence
+# is serialized here.
+_av_io_lock = threading.Lock()
+
 
 class RTSPCamera:
     """RTSP stream reader that pushes decoded frames to a DoubleFrameBuffer.
@@ -89,7 +97,8 @@ class RTSPCamera:
             self._container = None
         if container is not None:
             try:
-                container.close()
+                with _av_io_lock:
+                    container.close()
             except Exception:
                 pass
 
@@ -128,14 +137,12 @@ class RTSPCamera:
         if not self._running:
             return
 
-        with self._container_lock:
+        with self._container_lock, _av_io_lock:
             self._container = av.open(
                 self._rtsp_url,
                 options=_RTSP_OPTIONS,
                 timeout=(_OPEN_TIMEOUT_SECONDS, _STALL_TIMEOUT_SECONDS),
             )
-
-        try:
             video_stream = next(s for s in self._container.streams if s.type == "video")
             video_stream.codec_context.flags |= Flags.low_delay
             # Bound ffmpeg's internal slice-threading. With thread_count=0
@@ -147,6 +154,8 @@ class RTSPCamera:
             # while capping how many threads a single stream can ever hold.
             video_stream.codec_context.thread_type = "SLICE"
             video_stream.codec_context.thread_count = 2
+
+        try:
             self._connected = True
             logger.info("RTSP stream opened: %s", self._rtsp_url)
 
