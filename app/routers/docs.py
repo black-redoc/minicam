@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import markdown
 from fastapi import APIRouter, HTTPException, Request
@@ -15,13 +16,13 @@ templates = Jinja2Templates(directory="app/templates")
 _DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
 
 _TOPIC_TITLES: dict[str, str] = {
-    "overview":      "Overview",
+    "overview": "Overview",
     "configuration": "Configuration",
-    "cameras":       "Multi-Camera Setup",
-    "stream":        "Video Streaming",
-    "ptz":           "PTZ Control",
-    "api":           "API Reference",
-    "discovery":     "Camera Discovery",
+    "cameras": "Multi-Camera Setup",
+    "stream": "Video Streaming",
+    "ptz": "PTZ Control",
+    "api": "API Reference",
+    "discovery": "Camera Discovery",
 }
 
 
@@ -40,7 +41,9 @@ def _render_markdown(slug: str) -> str:
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Topic '{slug}' not found")
     text = path.read_text(encoding="utf-8")
-    return markdown.markdown(text, extensions=["fenced_code", "tables", "toc"])
+    return cast(
+        str, markdown.markdown(text, extensions=["fenced_code", "tables", "toc"])
+    )
 
 
 @router.get("/", response_class=HTMLResponse)

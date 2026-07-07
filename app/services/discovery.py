@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import cast
 from urllib.parse import urlparse
 
 from wsdiscovery import QName, WSDiscovery
@@ -21,7 +22,7 @@ _SCOPE_LOCATION = "onvif://www.onvif.org/location/"
 def _scope_value(scope: object) -> str:
     """Extract the string value from a Scope object or plain string."""
     if hasattr(scope, "getValue"):
-        return scope.getValue()  # type: ignore[union-attr]
+        return cast(str, scope.getValue())
     return str(scope)
 
 
@@ -31,11 +32,11 @@ def _extract_scopes(scopes: list[object]) -> tuple[str, str, str]:
     for scope in scopes:
         value = _scope_value(scope)
         if value.startswith(_SCOPE_NAME):
-            name = value[len(_SCOPE_NAME):]
+            name = value[len(_SCOPE_NAME) :]
         elif value.startswith(_SCOPE_HARDWARE):
-            hardware = value[len(_SCOPE_HARDWARE):]
+            hardware = value[len(_SCOPE_HARDWARE) :]
         elif value.startswith(_SCOPE_LOCATION):
-            location = value[len(_SCOPE_LOCATION):]
+            location = value[len(_SCOPE_LOCATION) :]
     return name, hardware, location
 
 

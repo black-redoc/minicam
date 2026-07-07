@@ -15,7 +15,7 @@ from app.models.config import (
     DiscoveredCamera,
 )
 from app.services.camera import RTSPCamera
-from app.services.config_writer import add_camera, load_config, remove_camera, update_camera
+from app.services.config_writer import add_camera, remove_camera, update_camera
 from app.services.discovery import discover_onvif_cameras
 from app.services.ptz import PTZConfig, PTZService
 from app.settings import get_config

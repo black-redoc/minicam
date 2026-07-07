@@ -5,7 +5,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
-from onvif import ONVIFCamera  # type: ignore[import-untyped]
+from onvif import ONVIFCamera
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,9 @@ class PTZService:
 
     def connect(self) -> None:
         """Establish ONVIF connection and retrieve the first media profile token."""
-        logger.info("Connecting ONVIF PTZ to %s:%d", self._config.host, self._config.port)
+        logger.info(
+            "Connecting ONVIF PTZ to %s:%d", self._config.host, self._config.port
+        )
         camera = ONVIFCamera(
             self._config.host,
             self._config.port,

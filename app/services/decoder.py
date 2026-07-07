@@ -24,7 +24,7 @@ def decode_video_frame(av_frame: av.VideoFrame, sequence: int) -> Frame:
     rgb_frame = av_frame.reformat(format="rgb24")
     image: np.ndarray = rgb_frame.to_ndarray()
 
-    if av_frame.pts is not None:
+    if av_frame.pts is not None and av_frame.time_base is not None:
         timestamp = float(av_frame.pts * av_frame.time_base)
     else:
         timestamp = time.monotonic()

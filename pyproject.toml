@@ -44,9 +44,10 @@ indent-style = "space"
 [tool.mypy]
 python_version = "3.14"
 strict = true
+plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["av.*", "onvif.*", "zeep.*"]
+module = ["av.*", "onvif.*", "zeep.*", "simplejpeg", "markdown", "wsdiscovery"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

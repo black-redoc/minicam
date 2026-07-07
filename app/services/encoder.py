@@ -1,5 +1,8 @@
 """JPEG encoding — converts RGB24 numpy arrays to JPEG bytes via libjpeg-turbo."""
+
 from __future__ import annotations
+
+from typing import cast
 
 import numpy as np
 import simplejpeg
@@ -18,4 +21,6 @@ def encode_jpeg(image: np.ndarray) -> bytes:
     Returns:
         Raw JPEG bytes ready to send over the wire.
     """
-    return simplejpeg.encode_jpeg(image, quality=JPEG_QUALITY, colorspace="RGB")
+    return cast(
+        bytes, simplejpeg.encode_jpeg(image, quality=JPEG_QUALITY, colorspace="RGB")
+    )

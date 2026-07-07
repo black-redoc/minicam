@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import tomllib
-import tomli_w
 from pathlib import Path
+
+import tomli_w
 
 from app.models.config import AppConfig, CameraConfig
 
@@ -49,7 +50,9 @@ def add_camera(camera: CameraConfig, path: Path = _CONFIG_PATH) -> AppConfig:
     return config
 
 
-def update_camera(name: str, camera: CameraConfig, path: Path = _CONFIG_PATH) -> AppConfig:
+def update_camera(
+    name: str, camera: CameraConfig, path: Path = _CONFIG_PATH
+) -> AppConfig:
     """Replace the camera with the given name. Raises KeyError if not found."""
     config = load_config(path)
     for i, c in enumerate(config.cameras):

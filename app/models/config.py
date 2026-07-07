@@ -17,7 +17,11 @@ class CameraConfig(BaseModel):
     channel: int = 1
     stream: Literal["main", "sub"] = "main"
 
-    @computed_field
+    # The pydantic.mypy plugin does not special-case @computed_field stacked
+    # on @property in this pydantic/mypy version combination, so mypy's core
+    # "decorators on @property are unsupported" rule still fires here. This
+    # is pydantic's own documented workaround for that known false positive.
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def rtsp_url(self) -> str:
         return (

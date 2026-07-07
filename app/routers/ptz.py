@@ -10,7 +10,13 @@ router = APIRouter(prefix="/api/ptz", tags=["ptz"])
 
 _ALLOWED_ACTIONS: frozenset[str] = frozenset({"up", "down", "left", "right", "stop"})
 _CONNECTION_ERROR_KEYWORDS: frozenset[str] = frozenset(
-    {"Connection aborted", "Connection reset", "ConnectionReset", "ConnectionError", "RemoteDisconnected"}
+    {
+        "Connection aborted",
+        "Connection reset",
+        "ConnectionReset",
+        "ConnectionError",
+        "RemoteDisconnected",
+    }
 )
 
 
@@ -51,7 +57,9 @@ async def ptz_command(camera_name: str, action: str) -> dict[str, str]:
                     state.ptz_executor, svc.reconnect_and_run, action
                 )
             except Exception as retry_exc:
-                raise HTTPException(status_code=503, detail=str(retry_exc)) from retry_exc
+                raise HTTPException(
+                    status_code=503, detail=str(retry_exc)
+                ) from retry_exc
         else:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 

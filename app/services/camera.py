@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from typing import cast
 
-import av  # type: ignore[import-untyped]
+import av
 from av.codec.context import Flags
 
 from app.buffers.double_frame_buffer import DoubleFrameBuffer
@@ -105,9 +106,7 @@ class RTSPCamera:
             try:
                 self._capture_stream()
             except Exception:
-                logger.error(
-                    "RTSP capture error on %s", self._rtsp_url, exc_info=True
-                )
+                logger.error("RTSP capture error on %s", self._rtsp_url, exc_info=True)
             else:
                 if self._running:
                     logger.warning(
@@ -137,9 +136,7 @@ class RTSPCamera:
             )
 
         try:
-            video_stream = next(
-                s for s in self._container.streams if s.type == "video"
-            )
+            video_stream = next(s for s in self._container.streams if s.type == "video")
             video_stream.codec_context.flags |= Flags.low_delay
             # Bound ffmpeg's internal slice-threading. With thread_count=0
             # (auto) it spawns one decode worker per CPU core — all inheriting
@@ -159,7 +156,9 @@ class RTSPCamera:
                 for av_frame in packet.decode():
                     if not self._running:
                         break
-                    frame = decode_video_frame(av_frame, self._sequence)
+                    frame = decode_video_frame(
+                        cast(av.VideoFrame, av_frame), self._sequence
+                    )
                     self._sequence += 1
                     self._buffer.write(frame)
         finally:
