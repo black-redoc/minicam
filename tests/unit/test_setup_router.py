@@ -11,8 +11,10 @@ from fastapi.testclient import TestClient
 from pathlib import Path
 
 import app.state as state_module
+from app.buffers.double_frame_buffer import DoubleFrameBuffer
 from app.models.config import AppConfig, CameraConfig, DiscoveredCamera
 from app.routers import setup as setup_router
+from app.services.camera import RTSPCamera
 from app.settings import get_config
 
 
@@ -187,6 +189,27 @@ class TestEditCamera:
         mock_camera.stop.assert_called_once()
         mock_ptz.disconnect.assert_called_once()
 
+    def test_returns_404_when_no_password_and_camera_missing(
+        self, client: TestClient
+    ) -> None:
+        empty_config = _make_app_config()
+        body = {**self._body, "name": "ghost", "password": ""}
+        with patch.object(setup_router, "get_config", return_value=empty_config):
+            res = client.put("/api/cameras/ghost", json=body)
+        assert res.status_code == 404
+
+    def test_renaming_camera_drops_old_buffer(
+        self, client: TestClient, mock_buffer: MagicMock
+    ) -> None:
+        renamed_body = {**self._body, "name": "cam1_renamed"}
+        with (
+            patch.object(setup_router, "update_camera"),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+        ):
+            client.put("/api/cameras/cam1", json=renamed_body)
+        assert "cam1" not in state_module.frame_buffers
+
     def test_empty_password_preserves_existing(self, client: TestClient) -> None:
         existing_config = _make_app_config(_make_camera("cam1"))
         captured: list[CameraConfig] = []
@@ -237,6 +260,38 @@ class TestDeleteCamera:
         ):
             client.delete("/api/cameras/cam1")
         mock_camera.stop.assert_called_once()
+
+
+class TestStartCameraAndPtz:
+    async def test_creates_new_buffer_when_none_exists(self) -> None:
+        cam_config = _make_camera("cam_new", "192.168.1.20")
+        assert "cam_new" not in state_module.frame_buffers
+        try:
+            with patch.object(setup_router.RTSPCamera, "start"):
+                setup_router._start_camera_and_ptz(cam_config)
+
+            buf = state_module.frame_buffers["cam_new"]
+            assert isinstance(buf, DoubleFrameBuffer)
+            assert isinstance(state_module.cameras["cam_new"], RTSPCamera)
+            assert "cam_new" in state_module.ptz_services
+        finally:
+            state_module.cameras.pop("cam_new", None)
+            state_module.ptz_services.pop("cam_new", None)
+            state_module.frame_buffers.pop("cam_new", None)
+
+    async def test_reuses_existing_buffer(self) -> None:
+        cam_config = _make_camera("cam_existing", "192.168.1.21")
+        existing_buf = DoubleFrameBuffer()
+        state_module.frame_buffers["cam_existing"] = existing_buf
+        try:
+            with patch.object(setup_router.RTSPCamera, "start"):
+                setup_router._start_camera_and_ptz(cam_config)
+
+            assert state_module.frame_buffers["cam_existing"] is existing_buf
+        finally:
+            state_module.cameras.pop("cam_existing", None)
+            state_module.ptz_services.pop("cam_existing", None)
+            state_module.frame_buffers.pop("cam_existing", None)
 
 
 class TestDiscover:

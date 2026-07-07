@@ -49,6 +49,16 @@ class TestDiscoverOnvifCamerasEmpty:
             result = discover_onvif_cameras(timeout=1)
         assert result == []
 
+    def test_skips_services_with_unparseable_host(self) -> None:
+        """An XAddr URL with no hostname (e.g. missing scheme) yields no host."""
+        svc = _make_service(xaddrs=["not-a-valid-url"], scopes=[])
+        with patch("app.services.discovery.WSDiscovery") as mock_wsd_cls:
+            mock_wsd = MagicMock()
+            mock_wsd_cls.return_value = mock_wsd
+            mock_wsd.searchServices.return_value = [svc]
+            result = discover_onvif_cameras(timeout=1)
+        assert result == []
+
 
 class TestDiscoverOnvifCamerasHostExtraction:
     def test_extracts_host_from_xaddr_url(self) -> None:

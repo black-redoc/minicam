@@ -1,12 +1,11 @@
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
 from av.codec.context import Flags
 
 from app.buffers.double_frame_buffer import DoubleFrameBuffer
 from app.services.camera import RTSPCamera
-from tests.fixtures.camera import make_mock_av_frame
+from tests.fixtures.camera import make_frame, make_mock_av_frame
 
 
 def _make_camera(url: str = "rtsp://fake/stream") -> tuple[RTSPCamera, DoubleFrameBuffer]:
@@ -159,6 +158,70 @@ class TestRTSPCameraEdgeCases:
             _OPEN_TIMEOUT_SECONDS,
             _STALL_TIMEOUT_SECONDS,
         )
+
+    def test_inner_loop_breaks_when_stopped_mid_decode(self) -> None:
+        """A container that stops running mid-packet must not decode further frames."""
+        cam, _ = _make_camera()
+        cam._running = True
+
+        mock_frame1 = make_mock_av_frame()
+        mock_frame2 = make_mock_av_frame()
+        mock_packet = MagicMock()
+        mock_packet.decode.return_value = [mock_frame1, mock_frame2]
+
+        mock_video_stream = MagicMock()
+        mock_video_stream.type = "video"
+        mock_video_stream.codec_context = MagicMock()
+
+        mock_container = MagicMock()
+        mock_container.streams = [mock_video_stream]
+        mock_container.demux.return_value = [mock_packet]
+
+        decoded_frames: list[object] = []
+
+        def fake_decode(av_frame: object, sequence: int) -> object:
+            decoded_frames.append(av_frame)
+            cam._running = False
+            return make_frame(sequence)
+
+        with (
+            patch("app.services.camera.av.open", return_value=mock_container),
+            patch("app.services.camera.decode_video_frame", side_effect=fake_decode),
+        ):
+            cam._capture_stream()
+
+        assert decoded_frames == [mock_frame1]
+
+    def test_outer_loop_breaks_when_stopped_between_packets(self) -> None:
+        """Once stopped, a pending second packet must never be decoded."""
+        cam, _ = _make_camera()
+        cam._running = True
+
+        mock_frame = make_mock_av_frame()
+        mock_packet1 = MagicMock()
+        mock_packet1.decode.return_value = [mock_frame]
+        mock_packet2 = MagicMock()
+        mock_packet2.decode.return_value = [mock_frame]
+
+        mock_video_stream = MagicMock()
+        mock_video_stream.type = "video"
+        mock_video_stream.codec_context = MagicMock()
+
+        mock_container = MagicMock()
+        mock_container.streams = [mock_video_stream]
+        mock_container.demux.return_value = [mock_packet1, mock_packet2]
+
+        def fake_decode(av_frame: object, sequence: int) -> object:
+            cam._running = False
+            return make_frame(sequence)
+
+        with (
+            patch("app.services.camera.av.open", return_value=mock_container),
+            patch("app.services.camera.decode_video_frame", side_effect=fake_decode),
+        ):
+            cam._capture_stream()
+
+        mock_packet2.decode.assert_not_called()
 
 
 class TestCloseContainer:

@@ -1,9 +1,8 @@
-import time
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 import app.state as state_module
@@ -81,3 +80,45 @@ class TestWebSocketStream:
                 ws.receive_bytes()
         except Exception:
             pass  # Expected: connection closed with 1008
+
+
+class TestWebSocketStreamErrorHandling:
+    """Drives the coroutine directly with mocked I/O to exercise the
+    disconnect/exception branches, which real socket teardown races too
+    unreliably to hit through TestClient.
+    """
+
+    def _make_mock_websocket(self) -> MagicMock:
+        ws = MagicMock()
+        ws.accept = AsyncMock()
+        ws.client = ("127.0.0.1", 12345)
+        return ws
+
+    async def test_websocket_disconnect_is_logged_and_swallowed(self) -> None:
+        frame = _make_frame(sequence=1)
+        mock_buffer = MagicMock()
+        mock_buffer.read.return_value = frame
+        state_module.frame_buffers["cam1"] = mock_buffer
+
+        ws = self._make_mock_websocket()
+        ws.send_bytes = AsyncMock(side_effect=WebSocketDisconnect(code=1001))
+
+        try:
+            await stream_router.stream(ws, "cam1")  # must not raise
+        finally:
+            state_module.frame_buffers.clear()
+
+    async def test_unexpected_exception_is_logged_and_reraised(self) -> None:
+        frame = _make_frame(sequence=1)
+        mock_buffer = MagicMock()
+        mock_buffer.read.return_value = frame
+        state_module.frame_buffers["cam1"] = mock_buffer
+
+        ws = self._make_mock_websocket()
+        ws.send_bytes = AsyncMock(side_effect=RuntimeError("socket blew up"))
+
+        try:
+            with pytest.raises(RuntimeError, match="socket blew up"):
+                await stream_router.stream(ws, "cam1")
+        finally:
+            state_module.frame_buffers.clear()
