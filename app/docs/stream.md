@@ -50,4 +50,4 @@ ws.onclose = (event) => {
 
 ## Multiple Viewers
 
-Multiple browser tabs can connect to the same `WS /ws/stream/{camera_name}` simultaneously. Each WebSocket handler reads independently from the `DoubleFrameBuffer` — no additional CPU is used for decoding per viewer.
+Multiple browser tabs can connect to the same `WS /ws/stream/{camera_name}` simultaneously. Each WebSocket handler reads independently from the `DoubleFrameBuffer` — RTSP demuxing/decoding is shared and does not cost extra CPU per viewer. JPEG encoding, however, is **not** shared: each connected WebSocket encodes its own copy of every new frame via `encode_jpeg` (`app/services/encoder.py`), so CPU cost for encoding scales with the number of active viewers.

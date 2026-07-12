@@ -23,13 +23,19 @@ POST /api/ptz/{camera_name}/{action}
 All actions return:
 
 ```json
-{ "ok": true }
+{ "action": "up", "status": "ok" }
 ```
 
-On error (camera not found, ONVIF unreachable):
+**Response `400`** (unknown action):
 
 ```json
-{ "detail": "Camera 'entrada' not found" }
+{ "detail": "Unknown PTZ action: 'xyz'" }
+```
+
+**Response `503`** (no PTZ service registered for the camera, or ONVIF unreachable even after an automatic reconnect attempt):
+
+```json
+{ "detail": "PTZ service not found for camera 'entrada'" }
 ```
 
 ## Speed
@@ -42,7 +48,7 @@ To change the speed, edit `PTZService` in `app/services/ptz.py`.
 
 `PTZService` connects **lazily** — the first PTZ command triggers the ONVIF handshake. Subsequent commands reuse the same connection.
 
-If the ONVIF service becomes unreachable (e.g., camera reboot), the service automatically reconnects on the next command.
+If a command fails, the `/api/ptz` router (`app/routers/ptz.py`) inspects the exception message for connection-error indicators (`Connection aborted`, `Connection reset`, `ConnectionError`, `RemoteDisconnected`). When one matches, it transparently drops the session, reconnects, and retries the same action once. If that retry also fails — or the failure wasn't a recognized connection error — the request returns `503` with the underlying error message.
 
 ## ONVIF Protocol Details
 
@@ -53,10 +59,11 @@ minicam uses `ContinuousMove` from the ONVIF PTZ WSDL:
   <tptz:ProfileToken>000</tptz:ProfileToken>
   <tptz:Velocity>
     <tt:PanTilt x="0.0" y="0.5"/>   <!-- up -->
-    <tt:Zoom x="0.0"/>
   </tptz:Velocity>
 </tptz:ContinuousMove>
 ```
+
+`ProfileToken` is not actually hardcoded to `"000"` — it is fetched dynamically from `GetProfiles()` the first time the service connects and reused for every subsequent command. Only `PanTilt` velocity is ever sent; `Zoom` is never included in `ContinuousMove` requests.
 
 A `Stop` action sends:
 
@@ -64,7 +71,7 @@ A `Stop` action sends:
 <tptz:Stop>
   <tptz:ProfileToken>000</tptz:ProfileToken>
   <tptz:PanTilt>true</tptz:PanTilt>
-  <tptz:Zoom>false</tptz:Zoom>
+  <tptz:Zoom>true</tptz:Zoom>
 </tptz:Stop>
 ```
 

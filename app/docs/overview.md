@@ -22,22 +22,22 @@ Routers                    Static files
         │
         ▼
    Services / State
-  ├─ RTSPCamera         — decodes RTSP stream into JPEG frames
+  ├─ RTSPCamera         — decodes RTSP stream into raw RGB24 frames
   ├─ PTZService         — sends ONVIF ContinuousMove commands
-  ├─ DoubleFrameBuffer  — lock-free double buffer for frame sharing
+  ├─ DoubleFrameBuffer  — single-producer double buffer for frame sharing
   └─ app.state          — global dict of cameras, buffers, ptz services
 ```
 
 ## Main Components
 
 ### RTSPCamera (`app/services/camera.py`)
-Reads an RTSP stream using `PyAV`, decodes frames to JPEG with `simplejpeg`, and writes them into a `DoubleFrameBuffer`. Runs on a background daemon thread.
+Reads an RTSP stream using `PyAV`, decodes frames to raw RGB24 numpy arrays (`app/services/decoder.py`), and writes them into a `DoubleFrameBuffer`. Runs on a background daemon thread. JPEG encoding is *not* done here — it happens on demand per WebSocket connection (see [Video Streaming](/doc/stream)).
 
 ### PTZService (`app/services/ptz.py`)
 Wraps the `onvif-zeep` library. Connects lazily on first PTZ command. Sends `ContinuousMove` SOAP requests (speed 0.5). Supports `up`, `down`, `left`, `right`, and `stop`.
 
 ### DoubleFrameBuffer (`app/buffers/double_frame_buffer.py`)
-Thread-safe double buffer: one `_write` slot (updated by the camera thread) and one `_read` slot (consumed by the WebSocket handler). A lock guards the swap so readers never block writers for more than one frame duration.
+Single-producer double buffer: writes are submitted to a dedicated single-worker `ThreadPoolExecutor`, which serializes the `_read`/`_write` slot swap without an explicit lock. Reads are lock-free — CPython's GIL guarantees that loading the `_read` attribute is atomic.
 
 ### Routers
 | Router | Prefix | Responsibility |

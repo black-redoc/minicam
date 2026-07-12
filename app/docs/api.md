@@ -48,6 +48,8 @@ Returns list of all configured cameras. Passwords are omitted.
     "host": "192.168.1.100",
     "rtsp_port": 554,
     "onvif_port": 80,
+    "user": "admin",
+    "password": "",
     "channel": 1,
     "stream": "main"
   }
@@ -71,7 +73,7 @@ Get a single camera by name.
 
 ## `POST /api/cameras`
 
-Add a new camera. Restarts camera services.
+Add a new camera and start its RTSP capture / PTZ services.
 
 **Request body:**
 ```json
@@ -87,9 +89,20 @@ Add a new camera. Restarts camera services.
 }
 ```
 
-**Response `201`:**
+`name` and `host` are required (non-empty). `rtsp_port` and `onvif_port` must be in `1`–`65535`, `channel` must be `>= 1`. Any field left out falls back to its default (see [Configuration](/doc/configuration)). Violating a constraint returns `422`.
+
+**Response `201`:** The created camera, same schema as a `GET /api/cameras/{name}` item (password redacted).
 ```json
-{ "ok": true, "name": "patio" }
+{
+  "name": "patio",
+  "host": "192.168.1.101",
+  "rtsp_port": 554,
+  "onvif_port": 80,
+  "user": "admin",
+  "password": "",
+  "channel": 1,
+  "stream": "main"
+}
 ```
 
 **Response `409`** (name already exists):
@@ -103,11 +116,13 @@ Add a new camera. Restarts camera services.
 
 Edit an existing camera. Stops, updates, and restarts the camera service.
 
-**Request body:** Same schema as POST.
+**Request body:** Same schema as POST. Leave `password` empty (`""`) to keep the camera's existing password — any non-empty value replaces it.
 
-**Response `200`:**
+**Response `200`:** Same schema as the POST response above.
+
+**Response `404`** (camera not found):
 ```json
-{ "ok": true, "name": "patio" }
+{ "detail": "Camera 'patio' not found" }
 ```
 
 ---
@@ -118,7 +133,12 @@ Remove a camera. Stops its thread and removes it from config.
 
 **Response `200`:**
 ```json
-{ "ok": true }
+{ "status": "ok" }
+```
+
+**Response `404`** (camera not found):
+```json
+{ "detail": "Camera 'patio' not found" }
 ```
 
 ---
@@ -129,8 +149,10 @@ Send a PTZ command. Valid actions: `up`, `down`, `left`, `right`, `stop`.
 
 **Response `200`:**
 ```json
-{ "ok": true }
+{ "action": "up", "status": "ok" }
 ```
+
+**Response `400`** (unknown action) / **`503`** (no PTZ service registered, or ONVIF unreachable after an automatic reconnect attempt) — see [PTZ Control](/doc/ptz) for details.
 
 ---
 

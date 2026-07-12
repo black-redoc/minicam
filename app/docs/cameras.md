@@ -26,19 +26,25 @@ Send a `POST` to `/api/cameras` with a JSON body:
 }
 ```
 
-**Response `201`:**
+**Response `201`:** The created camera (password redacted).
 ```json
-{ "ok": true, "name": "garage" }
+{
+  "name": "garage",
+  "host": "192.168.1.105",
+  "rtsp_port": 554,
+  "onvif_port": 80,
+  "user": "admin",
+  "password": "",
+  "channel": 1,
+  "stream": "main"
+}
 ```
 
 ## Editing a Camera
 
-Send a `PUT` to `/api/cameras/{name}` with the updated fields (same body schema as POST).
+Send a `PUT` to `/api/cameras/{name}` with the updated fields (same body schema as POST). Leave `password` empty (`""`) to keep the camera's existing password.
 
-**Response `200`:**
-```json
-{ "ok": true, "name": "garage" }
-```
+**Response `200`:** Same schema as the creation response above.
 
 After a successful edit:
 1. The old `RTSPCamera` thread is stopped.
@@ -52,7 +58,7 @@ Send a `DELETE` to `/api/cameras/{name}`.
 
 **Response `200`:**
 ```json
-{ "ok": true }
+{ "status": "ok" }
 ```
 
 The camera thread is stopped, its buffer is released, and the entry is removed from `config.toml`.
@@ -68,6 +74,8 @@ The camera thread is stopped, its buffer is released, and the entry is removed f
     "host": "192.168.1.100",
     "rtsp_port": 554,
     "onvif_port": 80,
+    "user": "admin",
+    "password": "",
     "channel": 1,
     "stream": "main"
   }

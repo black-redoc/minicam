@@ -43,16 +43,18 @@ stream = "sub"
 
 Each `[[cameras]]` block defines one IP camera. You may add as many as needed.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | yes | Unique identifier used in URLs and UI |
-| `host` | string | yes | Camera IP address |
-| `rtsp_port` | integer | yes | RTSP port (typically 554) |
-| `onvif_port` | integer | yes | ONVIF HTTP port (typically 80 or 8000) |
-| `user` | string | yes | Camera login username |
-| `password` | string | yes | Camera login password |
-| `channel` | integer | yes | Channel number (1 for single-channel cameras) |
-| `stream` | string | yes | `"main"` for HD stream, `"sub"` for sub-stream |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | yes | — | Unique identifier used in URLs and UI |
+| `host` | string | yes | — | Camera IP address |
+| `rtsp_port` | integer | no | `554` | RTSP port (typically 554) |
+| `onvif_port` | integer | no | `80` | ONVIF HTTP port (typically 80 or 8000) |
+| `user` | string | no | `"admin"` | Camera login username |
+| `password` | string | no | `""` | Camera login password |
+| `channel` | integer | no | `1` | Channel number (1 for single-channel cameras) |
+| `stream` | string | no | `"main"` | `"main"` for HD stream, `"sub"` for sub-stream |
+
+Only `name` and `host` are truly required — every other field falls back to its default if omitted from `config.toml`.
 
 ## RTSP URL Construction
 
@@ -73,3 +75,5 @@ rtsp://admin:secret@192.168.1.100:554/h264/ch1/main/av_stream
 ## Applying Changes
 
 minicam reads `config.toml` at startup. Cameras edited via the UI or API automatically rewrite the file and restart the affected camera services without requiring a full server restart.
+
+> **Security note:** Because `config.toml` stores camera passwords in plaintext, every write (`app/services/config_writer.py`) sets the file's permissions to `chmod 600` (owner read/write only).
