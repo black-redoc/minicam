@@ -8,6 +8,14 @@ minicam controls Pan-Tilt-Zoom via the **ONVIF** protocol (SOAP over HTTP). PTZ 
 POST /api/ptz/{camera_name}/{action}
 ```
 
+## Authorization
+
+The endpoint requires a valid session and the `can_use_ptz` permission on `camera_name` (see [Authentication & Authorization](/doc/auth)). Off-LAN callers additionally need an active WAN access grant.
+
+- **`401`** — no valid session.
+- **`404`** — the caller lacks `can_use_ptz` on this camera (same status as "camera doesn't exist," so an unauthorized caller can't tell the two apart).
+- **`403`** — request arrived from outside the LAN and the caller's WAN access gate is not active.
+
 ## Actions
 
 | Action | Description |
@@ -47,6 +55,8 @@ To change the speed, edit `PTZService` in `app/services/ptz.py`.
 ## Connection Lifecycle
 
 `PTZService` connects **lazily** — the first PTZ command triggers the ONVIF handshake. Subsequent commands reuse the same connection.
+
+Blocking ONVIF/SOAP calls run on a dedicated 4-worker `ThreadPoolExecutor` (`state.ptz_executor`, `app/state.py`), kept separate from the default executor so a burst of PTZ activity never delays JPEG frame encoding for any viewer.
 
 If a command fails, the `/api/ptz` router (`app/routers/ptz.py`) inspects the exception message for connection-error indicators (`Connection aborted`, `Connection reset`, `ConnectionError`, `RemoteDisconnected`). When one matches, it transparently drops the session, reconnects, and retries the same action once. If that retry also fails — or the failure wasn't a recognized connection error — the request returns `503` with the underlying error message.
 

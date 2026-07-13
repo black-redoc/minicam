@@ -17,6 +17,7 @@ _DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
 
 _TOPIC_TITLES: dict[str, str] = {
     "overview": "Overview",
+    "auth": "Authentication & Authorization",
     "configuration": "Configuration",
     "cameras": "Multi-Camera Setup",
     "stream": "Video Streaming",

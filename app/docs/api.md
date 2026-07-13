@@ -1,23 +1,36 @@
 # API Reference
 
-Complete reference for all HTTP and WebSocket endpoints exposed by minicam.
+Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unless noted otherwise, every `/api/*` endpoint below requires a valid session cookie — see [Authentication & Authorization](/doc/auth) for the session/permission/WAN-gate model, response codes (`401`/`403`/`404`), and the `minicam_session` cookie itself.
 
 ## Endpoint Summary
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/` | Dashboard HTML |
-| `GET` | `/health` | App health status |
-| `WS` | `/ws/stream/{camera_name}` | Binary JPEG stream |
-| `POST` | `/api/ptz/{camera_name}/{action}` | PTZ move/stop |
-| `GET` | `/api/cameras` | List all cameras |
-| `GET` | `/api/cameras/{name}` | Get single camera |
-| `POST` | `/api/cameras` | Add camera |
-| `PUT` | `/api/cameras/{name}` | Edit camera |
-| `DELETE` | `/api/cameras/{name}` | Remove camera |
-| `GET` | `/api/setup/discover` | Discover cameras on LAN |
-| `GET` | `/doc/` | Documentation index |
-| `GET` | `/doc/{topic}` | Documentation topic |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/` | session (redirects to `/login` if none) | Dashboard HTML, filtered to viewable cameras |
+| `GET` | `/login` | none | Login page |
+| `GET` | `/admin` | admin | Admin page (user + permission management) |
+| `GET` | `/health` | none | App health status |
+| `POST` | `/api/auth/login` | none | Log in, set session cookie |
+| `POST` | `/api/auth/logout` | session (optional) | Revoke session, clear cookie |
+| `GET` | `/api/auth/me` | session | Current user |
+| `POST` | `/api/auth/users` | admin | Create a user |
+| `GET` | `/api/auth/users` | admin | List all users |
+| `DELETE` | `/api/auth/users/{user_id}` | admin | Delete a user |
+| `POST` | `/api/auth/permissions` | admin | Grant/update a user's camera permission |
+| `GET` | `/api/auth/permissions?user_id=` | admin | List a user's camera permissions |
+| `POST` | `/api/stream/{camera_name}/token` | session + `can_view` | Issue a short-lived WebSocket stream token |
+| `WS` | `/ws/stream/{camera_name}?token=` | stream token | Binary JPEG stream |
+| `POST` | `/api/ptz/{camera_name}/{action}` | session + `can_use_ptz` | PTZ move/stop |
+| `GET` | `/api/cameras` | admin | List all cameras |
+| `GET` | `/api/cameras/{name}` | admin | Get single camera |
+| `POST` | `/api/cameras` | admin | Add camera |
+| `PUT` | `/api/cameras/{name}` | admin | Edit camera |
+| `DELETE` | `/api/cameras/{name}` | admin | Remove camera |
+| `GET` | `/api/setup/discover` | admin | Discover cameras on LAN |
+| `GET` | `/doc/` | none | Documentation index |
+| `GET` | `/doc/{topic}` | none | Documentation topic |
+
+See [Authentication & Authorization](/doc/auth) for the full `/api/auth/*` reference (request/response bodies, error codes). This page focuses on the camera-facing endpoints.
 
 ---
 
@@ -35,6 +48,10 @@ Returns current application status.
 ```
 
 ---
+
+## Camera Endpoints
+
+> Every endpoint in this section (`/api/cameras*`, `/api/setup/discover`) requires an **administrator session** — `401` with no session cookie, `403` for a logged-in non-admin user. See [Authentication & Authorization](/doc/auth).
 
 ## `GET /api/cameras`
 
@@ -143,22 +160,35 @@ Remove a camera. Stops its thread and removes it from config.
 
 ---
 
+## `POST /api/stream/{camera_name}/token`
+
+Requires a session with `can_view` on `camera_name` (and, off-LAN, an active WAN access grant). Issues a short-lived token that authorizes exactly one `WS /ws/stream/{camera_name}` handshake.
+
+**Response `200`:**
+```json
+{ "token": "<jwt>", "expires_in": 30 }
+```
+
+**Response `401`** (no session) / **`403`** (WAN access gate closed) / **`404`** (no `can_view` permission on this camera). See [Video Streaming](/doc/stream) for the full handshake and the `WS /ws/stream/{camera_name}?token=` endpoint.
+
+---
+
 ## `POST /api/ptz/{camera_name}/{action}`
 
-Send a PTZ command. Valid actions: `up`, `down`, `left`, `right`, `stop`.
+Send a PTZ command. Valid actions: `up`, `down`, `left`, `right`, `stop`. Requires a session with `can_use_ptz` on `camera_name` (and, off-LAN, an active WAN access grant).
 
 **Response `200`:**
 ```json
 { "action": "up", "status": "ok" }
 ```
 
-**Response `400`** (unknown action) / **`503`** (no PTZ service registered, or ONVIF unreachable after an automatic reconnect attempt) — see [PTZ Control](/doc/ptz) for details.
+**Response `400`** (unknown action) / **`401`** (no session) / **`403`** (WAN access gate closed) / **`404`** (no `can_use_ptz` permission on this camera) / **`503`** (no PTZ service registered, or ONVIF unreachable after an automatic reconnect attempt) — see [PTZ Control](/doc/ptz) for details.
 
 ---
 
 ## `GET /api/setup/discover`
 
-Scan the LAN for ONVIF cameras using WS-Discovery.
+Scan the LAN for ONVIF cameras using WS-Discovery. Requires an administrator session.
 
 **Response `200`:**
 ```json

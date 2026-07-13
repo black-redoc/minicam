@@ -77,3 +77,25 @@ rtsp://admin:secret@192.168.1.100:554/h264/ch1/main/av_stream
 minicam reads `config.toml` at startup. Cameras edited via the UI or API automatically rewrite the file and restart the affected camera services without requiring a full server restart.
 
 > **Security note:** Because `config.toml` stores camera passwords in plaintext, every write (`app/services/config_writer.py`) sets the file's permissions to `chmod 600` (owner read/write only).
+
+## Security Settings
+
+Unlike camera config, the security layer (sessions, stream tokens, WAN access) is configured entirely through **environment variables**, read once at startup by `app/security_settings.py`.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|--------------|
+| `MINICAM_JWT_SECRET` | **yes** | — | Secret used to sign session and stream-token JWTs. The app refuses to start without it. |
+| `MINICAM_SESSION_TTL_SECONDS` | no | `86400` (24h) | How long a login session stays valid before it must be renewed via a new login. |
+| `MINICAM_STREAM_TOKEN_TTL_SECONDS` | no | `30` | Lifetime of the short-lived token that authorizes one WebSocket handshake. See [Video Streaming](/doc/stream). |
+| `MINICAM_DB_PATH` | no | `app/minicam.db` | Path to the SQLite database storing users, sessions, camera permissions, and WAN access flags. |
+| `MINICAM_TRUSTED_PROXIES` | no | `""` (empty) | Comma-separated list of proxy IPs. Requests arriving through one of these are always classified as WAN — see [Authentication & Authorization](/doc/auth). |
+
+## Bootstrapping the First Admin
+
+There is no self-service signup and every admin-only endpoint requires an existing admin, so the first account must be created out-of-band with the CLI:
+
+```
+uv run python -m app.cli.create_user --email admin@example.com --admin
+```
+
+Omit `--password` to be prompted interactively instead of passing it on the command line. See [Authentication & Authorization](/doc/auth) for how sessions and permissions work after that first login.

@@ -14,6 +14,8 @@ minicam then resolves each response to an IP address and retrieves basic device 
 GET /api/setup/discover
 ```
 
+Requires an administrator session (see [Authentication & Authorization](/doc/auth)) — `401` with no session, `403` for a non-admin user.
+
 No parameters required. The scan takes a few seconds while waiting for camera responses.
 
 ## Response

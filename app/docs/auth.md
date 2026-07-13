@@ -1,0 +1,129 @@
+# Authentication & Authorization
+
+minicam gates every camera behind a session-authenticated, per-camera permission model, plus a separate gate for access from outside the local network (WAN). This page covers the `/api/auth/*` endpoints and the underlying session/permission/WAN-gate design used by every other router.
+
+## Sessions
+
+Login is email + password. A successful login opens a **revocable** session and sets an `httponly` cookie (`minicam_session`).
+
+```
+POST /api/auth/login
+```
+
+**Request body:**
+```json
+{ "email": "admin@example.com", "password": "secret" }
+```
+
+**Response `200`:** the logged-in user.
+```json
+{ "id": 1, "email": "admin@example.com", "is_admin": true }
+```
+
+**Response `401`** (wrong email/password, or the account is deactivated):
+```json
+{ "detail": "Invalid email or password" }
+```
+
+Under the hood, the session is a signed JWT (`app.services.auth.TokenService`) whose `jti` claim is also stored as a row in the `sessions` table (`app/db/migrations/0001_initial.sql`). Every authenticated request re-checks that row, so revoking a session (logout, or an admin deactivating the account) takes effect immediately — not just when the JWT itself expires.
+
+| Property | Value |
+|----------|-------|
+| Cookie name | `minicam_session` |
+| Cookie flags | `httponly`, `samesite=lax`, **not** `secure` (deliberate — minicam is also served over plain HTTP on the LAN) |
+| Default TTL | 24h (`MINICAM_SESSION_TTL_SECONDS`, see [Configuration](/doc/configuration#security-settings)) |
+| Signing | HS256, secret from `MINICAM_JWT_SECRET` |
+
+```
+POST /api/auth/logout
+```
+
+Revokes the current session (if any) and clears the cookie. Idempotent — safe to call with no session.
+
+```
+GET /api/auth/me
+```
+
+Returns the current user. **`401`** if there is no valid session.
+
+## Per-Camera Permissions
+
+Access to a specific camera is **deny-by-default**: a user can view or PTZ-control a camera only if an explicit row exists in `camera_permissions` granting it. There is no "all cameras" or role-based shortcut — every camera needs its own grant.
+
+| Permission | Governs |
+|------------|---------|
+| `can_view` | Seeing the camera on the dashboard, and minting a stream token (`POST /api/stream/{camera_name}/token`) |
+| `can_use_ptz` | Sending PTZ commands (`POST /api/ptz/{camera_name}/{action}`) |
+
+`can_use_ptz` does **not** imply `can_view` or vice versa — they're independent flags on the same row.
+
+When a user lacks a permission, the response is **`404`**, not `403` — a user without access must not be able to tell whether the camera exists at all.
+
+### Managing permissions (admin-only)
+
+```
+POST /api/auth/permissions
+```
+
+**Request body:**
+```json
+{ "user_id": 2, "camera_name": "entrada", "can_view": true, "can_use_ptz": false }
+```
+
+Upserts the permission row for that `(user_id, camera_name)` pair.
+
+**Response `200`:**
+```json
+{ "user_id": 2, "camera_name": "entrada", "can_view": true, "can_use_ptz": false }
+```
+
+```
+GET /api/auth/permissions?user_id=2
+```
+
+Lists every camera permission granted to that user.
+
+## Managing Users (admin-only)
+
+There is no self-service signup — every account is created by an existing admin (or via the CLI, for the very first one).
+
+```
+POST /api/auth/users
+```
+
+**Request body:**
+```json
+{ "email": "viewer@example.com", "password": "at-least-8-chars", "is_admin": false }
+```
+
+**Response `201`:** the created user (never includes `password_hash`). **Response `409`** if the email is already registered.
+
+```
+GET /api/auth/users
+```
+
+Lists every account.
+
+```
+DELETE /api/auth/users/{user_id}
+```
+
+**Response `204`** on success. **`400`** if you try to delete your own account. **`404`** if the user doesn't exist. **`409`** if the target is the last remaining admin — minicam refuses to lock itself out.
+
+## WAN Access Gate
+
+Separate from per-camera permissions, minicam classifies every request as **LAN** or **WAN** (`app/services/network.py`) and, for any request classified as WAN, additionally requires the user to have an active `wan_access` grant before it can view a stream or send a PTZ command. LAN requests never hit this check.
+
+Classification is fail-safe: any request that can't be confidently placed on the LAN — unparsable/missing client IP, or a request forwarded through a configured `MINICAM_TRUSTED_PROXIES` proxy — is classified as **WAN**.
+
+`wan_access` is deny-by-default too: no row for a user means WAN access is off. If the gate is closed, WAN callers get **`403`** ("WAN access is not enabled for this account") from `POST /api/stream/{camera_name}/token` and `POST /api/ptz/{camera_name}/{action}`.
+
+> **Current gap:** there is no admin endpoint or CLI command yet to grant `wan_access` — the migration's own comment describes it as "set by hand (CLI/admin endpoint)," but only the repository method (`SQLiteWanAccessRepository.set_active`) exists today, with no caller. Enabling WAN access currently means writing directly to the `wan_access` table in the SQLite database.
+
+## Admin Page
+
+`GET /admin` (admin-only) serves the user + permission management UI (`app/templates/admin.html`, `app/static/js/admin.js`): create users, list users, delete users, and grant/revoke per-camera permissions. Camera CRUD itself (add/edit/remove camera, WS-Discovery) stays on the main dashboard's "Camera settings" modal — see [Multi-Camera Setup](/doc/cameras).
+
+## Bootstrapping
+
+The very first admin account can't be created through the API (every admin endpoint requires an existing admin), so it's created via CLI instead. See [Configuration](/doc/configuration#bootstrapping-the-first-admin).
