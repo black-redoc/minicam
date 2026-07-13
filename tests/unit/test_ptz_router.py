@@ -1,11 +1,23 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.state as state_module
+from app.dependencies import enforce_wan_access_gate, require_can_use_ptz
+from app.models.domain import User
 from app.routers import ptz as ptz_router
+
+_AUTHORIZED_USER = User(
+    id=1,
+    email="ptz-user@example.com",
+    password_hash="hashed",
+    is_admin=False,
+    is_active=True,
+    created_at="t",
+    updated_at="t",
+)
 
 
 @pytest.fixture
@@ -15,12 +27,22 @@ def mock_ptz() -> MagicMock:
     return svc
 
 
+def _authorized_app() -> FastAPI:
+    """A test app assuming an already-authorized caller — the authorization
+    layer itself is exercised in tests/unit/test_dependencies.py and
+    tests/integration.
+    """
+    test_app = FastAPI()
+    test_app.include_router(ptz_router.router)
+    test_app.dependency_overrides[require_can_use_ptz] = lambda: _AUTHORIZED_USER
+    test_app.dependency_overrides[enforce_wan_access_gate] = lambda: None
+    return test_app
+
+
 @pytest.fixture
 def client(mock_ptz: MagicMock) -> TestClient:
     state_module.ptz_services["cam1"] = mock_ptz
-    test_app = FastAPI()
-    test_app.include_router(ptz_router.router)
-    yield TestClient(test_app)
+    yield TestClient(_authorized_app())
     state_module.ptz_services.clear()
 
 
@@ -68,9 +90,7 @@ class TestPtzEndpointDelegatesToService:
 class TestPtzEndpointErrors:
     def test_returns_503_when_camera_not_found(self) -> None:
         state_module.ptz_services.clear()
-        test_app = FastAPI()
-        test_app.include_router(ptz_router.router)
-        client = TestClient(test_app)
+        client = TestClient(_authorized_app())
         res = client.post("/api/ptz/nonexistent/up")
         assert res.status_code == 503
 
@@ -78,9 +98,7 @@ class TestPtzEndpointErrors:
         svc = MagicMock()
         svc.run_command.side_effect = RuntimeError("ONVIF timeout")
         state_module.ptz_services["err_cam"] = svc
-        test_app = FastAPI()
-        test_app.include_router(ptz_router.router)
-        client = TestClient(test_app)
+        client = TestClient(_authorized_app())
         res = client.post("/api/ptz/err_cam/up")
         assert res.status_code == 503
         assert "ONVIF timeout" in res.json()["detail"]
@@ -94,9 +112,7 @@ class TestPtzEndpointErrors:
         )
         svc.reconnect_and_run.return_value = None
         state_module.ptz_services["retry_cam"] = svc
-        test_app = FastAPI()
-        test_app.include_router(ptz_router.router)
-        client = TestClient(test_app)
+        client = TestClient(_authorized_app())
         res = client.post("/api/ptz/retry_cam/up")
         assert res.status_code == 200
         svc.run_command.assert_called_once_with("up")
@@ -108,9 +124,7 @@ class TestPtzEndpointErrors:
         svc.run_command.side_effect = Exception("Connection reset by peer")
         svc.reconnect_and_run.side_effect = Exception("Connection reset by peer")
         state_module.ptz_services["fail_cam"] = svc
-        test_app = FastAPI()
-        test_app.include_router(ptz_router.router)
-        client = TestClient(test_app)
+        client = TestClient(_authorized_app())
         res = client.post("/api/ptz/fail_cam/up")
         assert res.status_code == 503
         state_module.ptz_services.pop("fail_cam", None)

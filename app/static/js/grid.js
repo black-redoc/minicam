@@ -9,6 +9,7 @@
  * Dispatches 'grid:select' on document when a cell is clicked:
  *   document.addEventListener('grid:select', (e) => console.log(e.detail.name));
  */
+/* exported GridWidget */
 
 // 1×1 transparent GIF — used as initial img src so the browser never shows
 // the broken-image icon while the WebSocket is still connecting.

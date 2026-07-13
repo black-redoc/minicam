@@ -12,12 +12,16 @@ dependencies = [
     "wsdiscovery==2.1.2",
     "markdown==3.7",
     "wsproto==1.2.0",
+    "aiosqlite==0.21.0",
+    "pyjwt==2.10.1",
+    "bcrypt==4.3.0",
 ]
 
 [dependency-groups]
 dev = [
     "locust==2.44.4",
     "mypy==2.1.0",
+    "pre-commit==4.6.0",
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "pytest-benchmark==5.2.3",
@@ -36,6 +40,16 @@ ignore = ["ANN101", "ANN102"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's DI system requires Depends()/Query()/Cookie() as parameter
+# defaults — that's the framework's own documented pattern, not the
+# mutable-default-argument bug B008 exists to catch.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Cookie",
+]
 
 [tool.ruff.format]
 quote-style = "double"

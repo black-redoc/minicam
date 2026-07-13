@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app import state
+from app.dependencies import enforce_wan_access_gate, require_can_use_ptz
+from app.models.domain import User
 
 router = APIRouter(prefix="/api/ptz", tags=["ptz"])
 
@@ -26,7 +28,12 @@ def _is_connection_error(exc: Exception) -> bool:
 
 
 @router.post("/{camera_name}/{action}")
-async def ptz_command(camera_name: str, action: str) -> dict[str, str]:
+async def ptz_command(
+    camera_name: str,
+    action: str,
+    user: User = Depends(require_can_use_ptz),
+    _wan_gate: None = Depends(enforce_wan_access_gate),
+) -> dict[str, str]:
     """Send a PTZ command to the named camera.
 
     Lazily connects to ONVIF on the first call.
@@ -35,6 +42,8 @@ async def ptz_command(camera_name: str, action: str) -> dict[str, str]:
     Args:
         camera_name: Key used to look up the PTZ service in the registry.
         action: One of up | down | left | right | stop.
+        user: Resolved by require_can_use_ptz — 404 if the caller lacks
+            PTZ permission on this camera.
     """
     if action not in _ALLOWED_ACTIONS:
         raise HTTPException(status_code=400, detail=f"Unknown PTZ action: '{action}'")

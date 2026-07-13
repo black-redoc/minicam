@@ -1,8 +1,3 @@
-from unittest.mock import MagicMock
-
-import numpy as np
-import pytest
-
 from app.services.decoder import decode_video_frame
 from tests.fixtures.camera import make_mock_av_frame
 

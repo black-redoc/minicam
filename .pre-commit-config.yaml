@@ -1,0 +1,46 @@
+repos:
+  # ── JavaScript: fast syntax check first ──────────────────────────────
+  - repo: local
+    hooks:
+      - id: node-check
+        name: node --check (JS syntax)
+        entry: node --check
+        language: system
+        files: \.js$
+
+      - id: eslint
+        name: eslint
+        entry: npm run lint --silent --
+        language: system
+        files: \.js$
+        pass_filenames: false
+
+      - id: tsc
+        name: tsc --noEmit (JSDoc type check)
+        entry: npm run typecheck --silent --
+        language: system
+        files: \.js$
+        pass_filenames: false
+
+  # ── Python: ruff (matches pyproject.toml's pinned ruff==0.15.20) ────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
+        args: [--check]
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy app main.py
+        language: system
+        pass_filenames: false
+
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -1,8 +1,6 @@
 import threading
 import time
 
-import pytest
-
 from app.buffers.double_frame_buffer import DoubleFrameBuffer
 from app.models.frame import Frame
 from tests.fixtures.camera import make_frame

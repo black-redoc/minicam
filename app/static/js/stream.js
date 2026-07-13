@@ -2,6 +2,7 @@
  * VideoStream — manages a WebSocket connection that receives binary JPEG
  * frames and renders them to an <img> element.
  */
+/* exported VideoStream */
 class VideoStream {
     #img
     #overlay
@@ -20,7 +21,7 @@ class VideoStream {
      * @param {object} opts
      * @param {HTMLImageElement}  opts.img         - Target <img> for the camera feed.
      * @param {HTMLElement}       opts.overlay     - Overlay shown when disconnected.
-     * @param {HTMLElement}       opts.fps         - Element displaying FPS counter.
+     * @param {HTMLElement}       [opts.fps]       - Element displaying FPS counter (optional).
      * @param {HTMLElement}       opts.badge       - Status badge element.
      * @param {string}            opts.cameraName  - Initial camera name for the stream URL.
      */
@@ -32,15 +33,32 @@ class VideoStream {
         this.#cameraName = cameraName;
     }
 
-    connect() {
+    async connect() {
         if (this.#ws) {
             this.#ws.onclose = null;
             this.#ws.close();
             this.#ws = null;
         }
 
+        this.#setStatus('connecting', 'Connecting…');
+
+        let token;
+        try {
+            token = await this.#fetchStreamToken();
+        } catch {
+            // No session, no permission on this camera, or WAN access gate
+            // closed — same recovery path as a dropped socket: back off
+            // and retry, so it self-heals once the caller logs in / is
+            // granted access without a page reload.
+            this.#setStatus('disconnected', 'Unauthorized');
+            this.#overlay.classList.remove('hidden');
+            this.#reconnectTimer = setTimeout(() => this.connect(), this.#reconnectDelay);
+            return;
+        }
+
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const url   = `${proto}//${location.host}/ws/stream/${encodeURIComponent(this.#cameraName)}`;
+        const url   = `${proto}//${location.host}/ws/stream/`
+                    + `${encodeURIComponent(this.#cameraName)}?token=${encodeURIComponent(token)}`;
 
         this.#ws            = new WebSocket(url);
         this.#ws.binaryType = 'blob';
@@ -48,8 +66,25 @@ class VideoStream {
         this.#ws.onmessage  = (e) => this.#onFrame(e.data);
         this.#ws.onclose    = () => this.#onClose();
         this.#ws.onerror    = () => this.#onError();
+    }
 
-        this.#setStatus('connecting', 'Connecting…');
+    /**
+     * Mint a short-lived, camera-bound token for the WebSocket handshake
+     * (see POST /api/stream/{camera_name}/token). Distinct from the
+     * session cookie — the WS route only accepts this token, by design.
+     *
+     * @returns {Promise<string>}
+     */
+    async #fetchStreamToken() {
+        const res = await authedFetch(
+            `/api/stream/${encodeURIComponent(this.#cameraName)}/token`,
+            { method: 'POST' },
+        );
+        if (!res.ok) {
+            throw new Error(`Failed to obtain stream token: ${res.status}`);
+        }
+        const data = await res.json();
+        return data.token;
     }
 
     disconnect() {

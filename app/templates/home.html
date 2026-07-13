@@ -60,20 +60,87 @@
             <span class="hidden sm:inline text-xs font-medium">Docs</span>
         </a>
 
-        <button id="config-btn"
-                type="button"
-                aria-label="Open camera settings"
-                class="flex items-center justify-center w-8 h-8 rounded-lg
-                       text-slate-400 hover:text-slate-100 hover:bg-slate-800
-                       transition-colors focus:outline-none focus:ring-2
-                       focus:ring-sky-500 focus:ring-offset-1 focus:ring-offset-slate-900">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                 stroke-linejoin="round" class="w-4 h-4 pointer-events-none">
-                <circle cx="12" cy="12" r="3"/>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-            </svg>
-        </button>
+        <!-- More options menu -->
+        <div class="relative">
+            <button id="nav-menu-btn"
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                    aria-controls="nav-menu-panel"
+                    aria-label="More options"
+                    title="More options"
+                    class="flex items-center justify-center w-8 h-8 rounded-lg
+                           text-slate-400 hover:text-slate-100 hover:bg-slate-800
+                           transition-colors focus:outline-none focus:ring-2
+                           focus:ring-sky-500 focus:ring-offset-1 focus:ring-offset-slate-900">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" class="w-4 h-4 pointer-events-none">
+                    <circle cx="12" cy="5" r="1"/>
+                    <circle cx="12" cy="12" r="1"/>
+                    <circle cx="12" cy="19" r="1"/>
+                </svg>
+            </button>
+
+            <div id="nav-menu-panel"
+                 role="menu"
+                 aria-labelledby="nav-menu-btn"
+                 class="hidden absolute right-0 mt-2 w-52 py-1 z-30
+                        bg-slate-800 border border-slate-700 rounded-xl shadow-2xl
+                        origin-top-right">
+
+                {% if is_admin %}
+                <a href="/admin"
+                   role="menuitem"
+                   class="flex items-center gap-2 px-3 py-2 text-sm text-slate-300
+                          hover:bg-slate-700/60 hover:text-slate-100
+                          focus:bg-slate-700/60 focus:outline-none transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round" class="w-4 h-4 pointer-events-none shrink-0">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                    <span>Admin</span>
+                </a>
+                {% endif %}
+
+                <button id="config-btn"
+                        type="button"
+                        role="menuitem"
+                        class="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-300
+                               hover:bg-slate-700/60 hover:text-slate-100
+                               focus:bg-slate-700/60 focus:outline-none transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round" class="w-4 h-4 pointer-events-none shrink-0">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                    <span>Camera settings</span>
+                </button>
+
+                <div class="my-1 border-t border-slate-700"></div>
+
+                <button id="logout-btn"
+                        type="button"
+                        role="menuitem"
+                        class="flex items-center gap-2 w-full px-3 py-2 text-sm text-red-400
+                               hover:bg-slate-700/60 hover:text-red-300
+                               focus:bg-slate-700/60 focus:outline-none transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round" class="w-4 h-4 pointer-events-none shrink-0">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                        <path d="M16 17l5-5-5-5"/>
+                        <path d="M21 12H9"/>
+                    </svg>
+                    <span>Log out</span>
+                </button>
+            </div>
+        </div>
     </div>
 
 </header>
@@ -237,10 +304,13 @@
 
 
 {% block scripts %}
+<script src="{{ url_for('static', path='js/auth.js') }}"></script>
+<script src="{{ url_for('static', path='js/confirm-dialog.js') }}"></script>
 <script src="{{ url_for('static', path='js/stream.js') }}"></script>
 <script src="{{ url_for('static', path='js/ptz.js') }}"></script>
 <script src="{{ url_for('static', path='js/config.js') }}"></script>
 <script src="{{ url_for('static', path='js/grid.js') }}"></script>
+<script src="{{ url_for('static', path='js/navmenu.js') }}"></script>
 <script>
     const INITIAL_CAMERA = "{{ active_camera }}";
 
@@ -277,6 +347,13 @@
 
     document.getElementById('config-btn').addEventListener('click', () => configWidget.open());
 
+    initNavMenu(
+        document.getElementById('nav-menu-btn'),
+        document.getElementById('nav-menu-panel')
+    );
+
+    document.getElementById('logout-btn').addEventListener('click', () => logout());
+
     // ── Sync FPS / status to secondary display elements ──────
     const detailFps    = document.getElementById('detail-fps');
     const detailStatus = document.getElementById('detail-status');
@@ -312,7 +389,7 @@
     }
 
     async function syncGridBtn() {
-        const res = await fetch('/api/cameras');
+        const res = await authedFetch('/api/cameras');
         hideLoader();
         if (!res.ok) { fadeIn(document.getElementById('single-view')); stream.connect(); return; }
         const cameras = await res.json();
@@ -332,7 +409,7 @@
         stream.disconnect();
         document.getElementById('single-view').classList.add('hidden');
         fadeIn(document.getElementById('grid-view'));
-        const res = await fetch('/api/cameras');
+        const res = await authedFetch('/api/cameras');
         if (!res.ok) return;
         const cameras = await res.json();
         gridWidget.mount(cameras);

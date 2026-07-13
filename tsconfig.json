@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    // TypeScript 7 defaults noImplicitAny/strictNullChecks to on even
+    // without "strict": true. Explicitly disabling restores the lenient
+    // checkJs behavior this project wants (real bugs still caught; no
+    // whole-file null-guard noise from DOM APIs).
+    "strict": false
+  },
+  "include": ["app/static/js/**/*.js"]
+}

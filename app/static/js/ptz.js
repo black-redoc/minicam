@@ -4,6 +4,7 @@
  * Direction buttons trigger a move on pointerdown and stop on pointerup/leave,
  * allowing continuous movement while the button is held (mouse or touch).
  */
+/* exported initPtz */
 
 const PTZ_DIRECTIONS = ['up', 'down', 'left', 'right'];
 
@@ -17,13 +18,14 @@ const PTZ_DIRECTIONS = ['up', 'down', 'left', 'right'];
  */
 async function sendPtz(action, cameraName, signal) {
     try {
-        const res = await fetch(
+        const res = await authedFetch(
             `/api/ptz/${encodeURIComponent(cameraName)}/${action}`,
             { method: 'POST', signal }
         );
         if (!res.ok) console.warn(`PTZ "${action}" responded ${res.status}`);
     } catch (err) {
         if (err.name === 'AbortError') return; // superseded by a newer command
+        if (err instanceof SessionExpiredError) return; // authedFetch already redirected
         console.error(`PTZ "${action}" failed:`, err);
     }
 }
@@ -61,7 +63,7 @@ function initPtz(container, cameraName) {
 
         btn.addEventListener('pointerdown', (e) => {
             e.preventDefault();
-            btn.setPointerCapture(e.pointerId);
+            btn.setPointerCapture(/** @type {PointerEvent} */ (e).pointerId);
             btn.setAttribute('aria-pressed', 'true');
             dispatch(action);
         });

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import tomli_w
 from pathlib import Path
 
 import pytest
+import tomli_w
 
 from app.models.config import AppConfig, CameraConfig
 from app.settings import get_config

@@ -10,6 +10,7 @@
  *   widget.open()   — open modal and show the list view.
  *   widget.close()  — close modal and restore focus to the trigger element.
  */
+/* exported ConfigWidget */
 
 const CAMERAS_API  = '/api/cameras';
 const DISCOVER_API = '/api/setup/discover';
@@ -26,15 +27,15 @@ class ConfigWidget {
 
     /**
      * @param {string}   modalId
-     * @param {object}   opts
-     * @param {Function} opts.onCamerasChanged  - Called after any add / edit / delete.
-     * @param {Function} opts.onCameraUpdated   - Called after a successful edit with
+     * @param {object}   [opts]
+     * @param {Function} [opts.onCamerasChanged]  - Called after any add / edit / delete.
+     * @param {Function} [opts.onCameraUpdated]   - Called after a successful edit with
      *                                            (oldName, newName). Use to reconnect
      *                                            streams that target the edited camera.
-     * @param {Function} opts.onCameraSelected  - Called with (name) when the user picks
+     * @param {Function} [opts.onCameraSelected]  - Called with (name) when the user picks
      *                                            a camera from the list. Widget closes
      *                                            itself right after.
-     * @param {Function} opts.getActiveCamera   - Returns the name of the currently active
+     * @param {Function} [opts.getActiveCamera]   - Returns the name of the currently active
      *                                            camera, used to highlight it in the list.
      */
     constructor(modalId, { onCamerasChanged, onCameraUpdated, onCameraSelected, getActiveCamera } = {}) {
@@ -128,7 +129,7 @@ class ConfigWidget {
         const errorEl = this.#innerEl.querySelector('[data-list-error]');
 
         try {
-            const res = await fetch(CAMERAS_API);
+            const res = await authedFetch(CAMERAS_API);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const cameras = await res.json();
             this.#renderCameraList(cameras, listEl);
@@ -225,12 +226,18 @@ class ConfigWidget {
     }
 
     async #deleteCamera(name) {
-        if (!confirm(`Delete camera "${name}"?`)) return;
+        const confirmed = await confirmDialog({
+            title: 'Delete camera',
+            message: `Delete camera "${name}"?`,
+            confirmLabel: 'Delete',
+            danger: true,
+        });
+        if (!confirmed) return;
 
         const errorEl = this.#innerEl.querySelector('[data-list-error]');
 
         try {
-            const res = await fetch(`${CAMERAS_API}/${encodeURIComponent(name)}`, {
+            const res = await authedFetch(`${CAMERAS_API}/${encodeURIComponent(name)}`, {
                 method: 'DELETE',
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -452,13 +459,13 @@ class ConfigWidget {
         try {
             let res;
             if (isNew) {
-                res = await fetch(CAMERAS_API, {
+                res = await authedFetch(CAMERAS_API, {
                     method:  'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body:    JSON.stringify(data),
                 });
             } else {
-                res = await fetch(
+                res = await authedFetch(
                     `${CAMERAS_API}/${encodeURIComponent(oldName)}`,
                     {
                         method:  'PUT',
@@ -502,7 +509,7 @@ class ConfigWidget {
         if (discoverBtn) discoverBtn.disabled = true;
 
         try {
-            const res = await fetch(DISCOVER_API);
+            const res = await authedFetch(DISCOVER_API);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const cameras = await res.json();
             this.#renderDiscoveryResults(cameras, listEl);

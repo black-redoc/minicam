@@ -150,9 +150,7 @@ class TestPTZServiceEnsureConnected:
             svc._profile_token = "token"
 
         with patch.object(svc, "connect", side_effect=slow_connect):
-            threads = [
-                threading.Thread(target=svc.ensure_connected) for _ in range(8)
-            ]
+            threads = [threading.Thread(target=svc.ensure_connected) for _ in range(8)]
             for t in threads:
                 t.start()
             for t in threads:

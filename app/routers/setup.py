@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app import state
+from app.dependencies import require_admin
 from app.models.config import (
     CameraConfig,
     CameraConfigRequest,
@@ -22,7 +23,7 @@ from app.settings import get_config
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["setup"])
+router = APIRouter(tags=["setup"], dependencies=[Depends(require_admin)])
 
 
 def _to_response(cam: CameraConfig) -> CameraConfigResponse:

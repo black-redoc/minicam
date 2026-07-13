@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}minicam — Admin{% endblock %}
+
+{% block content %}
+
+<header class="sticky top-0 z-20 flex items-center justify-between h-14 px-4 md:px-6
+               bg-slate-900/90 backdrop-blur border-b border-slate-800">
+    <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-sky-400 dot-glow"></span>
+        <span class="text-sky-400 font-bold tracking-tight text-base">minicam</span>
+        <span class="text-slate-600">/</span>
+        <span class="text-slate-300 text-sm">Admin</span>
+    </div>
+    <a href="/"
+       class="text-xs font-medium text-slate-400 hover:text-slate-100 transition-colors">
+        &larr; Dashboard
+    </a>
+</header>
+
+<main class="p-4 md:p-6 max-w-3xl mx-auto w-full flex flex-col gap-6">
+
+    <!-- Create user -->
+    <section class="card flex flex-col gap-4">
+        <h2 class="text-xs text-slate-500 uppercase tracking-widest font-semibold">
+            Create user
+        </h2>
+        <form id="create-user-form" class="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
+            <div class="flex flex-col gap-1 flex-1 w-full">
+                <label for="new-email" class="text-xs text-slate-400">Email</label>
+                <input id="new-email" name="email" type="email" required
+                       class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
+                              text-sm text-slate-100 focus:outline-none focus:ring-2
+                              focus:ring-sky-500">
+            </div>
+            <div class="flex flex-col gap-1 flex-1 w-full">
+                <label for="new-password" class="text-xs text-slate-400">Password</label>
+                <input id="new-password" name="password" type="password" required minlength="8"
+                       class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
+                              text-sm text-slate-100 focus:outline-none focus:ring-2
+                              focus:ring-sky-500">
+            </div>
+            <label class="flex items-center gap-2 text-xs text-slate-400 h-9 shrink-0">
+                <input id="new-is-admin" type="checkbox" class="accent-sky-500">
+                Admin
+            </label>
+            <button type="submit"
+                    class="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold
+                           text-sm rounded-lg px-4 h-9 shrink-0 transition-colors">
+                Create
+            </button>
+        </form>
+        <p id="create-user-error" class="hidden text-xs text-red-400" role="alert"></p>
+    </section>
+
+    <!-- Users + per-camera permissions -->
+    <section class="flex flex-col gap-3">
+        <h2 class="text-xs text-slate-500 uppercase tracking-widest font-semibold px-1">
+            Users &amp; camera permissions
+        </h2>
+        <p id="users-list-error" class="hidden text-xs text-red-400 px-1" role="alert"></p>
+        <div id="users-list" class="flex flex-col gap-3">
+            <p class="text-sm text-slate-500 px-1">Loading…</p>
+        </div>
+    </section>
+
+</main>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', path='js/auth.js') }}"></script>
+<script src="{{ url_for('static', path='js/confirm-dialog.js') }}"></script>
+<script src="{{ url_for('static', path='js/admin.js') }}"></script>
+{% endblock %}

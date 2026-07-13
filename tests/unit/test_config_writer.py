@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import tomllib
-import tomli_w
 from pathlib import Path
 
 import pytest
+import tomli_w
 
 import app.services.config_writer as config_writer_module
 from app.models.config import AppConfig, CameraConfig

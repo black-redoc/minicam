@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from app.services.encoder import encode_jpeg
 

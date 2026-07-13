@@ -8,7 +8,9 @@ from app.services.camera import RTSPCamera
 from tests.fixtures.camera import make_frame, make_mock_av_frame
 
 
-def _make_camera(url: str = "rtsp://fake/stream") -> tuple[RTSPCamera, DoubleFrameBuffer]:
+def _make_camera(
+    url: str = "rtsp://fake/stream",
+) -> tuple[RTSPCamera, DoubleFrameBuffer]:
     buf = DoubleFrameBuffer()
     cam = RTSPCamera(rtsp_url=url, buffer=buf)
     return cam, buf
@@ -27,21 +29,27 @@ class TestRTSPCameraInitialState:
 class TestRTSPCameraStartStop:
     def test_start_sets_running(self) -> None:
         cam, _ = _make_camera()
-        with patch("app.services.camera.av.open", side_effect=ConnectionError("no cam")):
+        with patch(
+            "app.services.camera.av.open", side_effect=ConnectionError("no cam")
+        ):
             cam.start()
             assert cam._running is True
             cam.stop()
 
     def test_stop_sets_running_false(self) -> None:
         cam, _ = _make_camera()
-        with patch("app.services.camera.av.open", side_effect=ConnectionError("no cam")):
+        with patch(
+            "app.services.camera.av.open", side_effect=ConnectionError("no cam")
+        ):
             cam.start()
             cam.stop()
             assert cam._running is False
 
     def test_double_start_does_not_raise(self) -> None:
         cam, _ = _make_camera()
-        with patch("app.services.camera.av.open", side_effect=ConnectionError("no cam")):
+        with patch(
+            "app.services.camera.av.open", side_effect=ConnectionError("no cam")
+        ):
             cam.start()
             cam.start()
             cam.stop()
@@ -52,7 +60,9 @@ class TestRTSPCameraStartStop:
 
     def test_is_not_connected_after_stop(self) -> None:
         cam, _ = _make_camera()
-        with patch("app.services.camera.av.open", side_effect=ConnectionError("no cam")):
+        with patch(
+            "app.services.camera.av.open", side_effect=ConnectionError("no cam")
+        ):
             cam.start()
             cam.stop()
             assert cam.is_connected() is False
@@ -244,6 +254,7 @@ class TestCloseContainer:
 class TestRTSPOptions:
     def test_low_latency_options_present(self) -> None:
         from app.services.camera import _RTSP_OPTIONS
+
         assert _RTSP_OPTIONS["analyzeduration"] == "0"
         assert _RTSP_OPTIONS["probesize"] == "32768"
         assert _RTSP_OPTIONS["max_delay"] == "0"
@@ -251,8 +262,10 @@ class TestRTSPOptions:
 
     def test_tcp_transport_present(self) -> None:
         from app.services.camera import _RTSP_OPTIONS
+
         assert _RTSP_OPTIONS["rtsp_transport"] == "tcp"
 
     def test_nobuffer_present(self) -> None:
         from app.services.camera import _RTSP_OPTIONS
+
         assert _RTSP_OPTIONS["fflags"] == "nobuffer"

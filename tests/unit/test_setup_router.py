@@ -5,17 +5,26 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-import tomli_w
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pathlib import Path
 
 import app.state as state_module
 from app.buffers.double_frame_buffer import DoubleFrameBuffer
+from app.dependencies import require_admin
 from app.models.config import AppConfig, CameraConfig, DiscoveredCamera
+from app.models.domain import User
 from app.routers import setup as setup_router
 from app.services.camera import RTSPCamera
-from app.settings import get_config
+
+_ADMIN = User(
+    id=1,
+    email="admin@example.com",
+    password_hash="hashed",
+    is_admin=True,
+    is_active=True,
+    created_at="t",
+    updated_at="t",
+)
 
 
 def _make_camera(name: str = "cam1", host: str = "192.168.1.10") -> CameraConfig:
@@ -58,6 +67,7 @@ def client(
     state_module.frame_buffers["cam1"] = mock_buffer
     test_app = FastAPI()
     test_app.include_router(setup_router.router)
+    test_app.dependency_overrides[require_admin] = lambda: _ADMIN
     yield TestClient(test_app)
     state_module.cameras.clear()
     state_module.ptz_services.clear()
@@ -146,7 +156,9 @@ class TestCreateCamera:
         mock_add.assert_called_once()
 
     def test_returns_409_on_duplicate(self, client: TestClient) -> None:
-        with patch.object(setup_router, "add_camera", side_effect=ValueError("duplicate")):
+        with patch.object(
+            setup_router, "add_camera", side_effect=ValueError("duplicate")
+        ):
             res = client.post("/api/cameras", json=self._body)
         assert res.status_code == 409
 

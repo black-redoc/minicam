@@ -1,17 +1,20 @@
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app import state
 from app.buffers.double_frame_buffer import DoubleFrameBuffer
+from app.db.connection import close_db, init_db
+from app.routers import auth as auth_router
 from app.routers import dashboard
-from app.routers import ptz as ptz_router
 from app.routers import docs as docs_router
+from app.routers import ptz as ptz_router
 from app.routers import setup as setup_router
 from app.routers import stream as stream_router
+from app.security_settings import get_security_settings
 from app.services.camera import RTSPCamera
 from app.services.ptz import PTZConfig, PTZService
 from app.settings import get_config
@@ -26,8 +29,10 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     config = get_config()
+    security_settings = get_security_settings()
+    await init_db(security_settings.db_path)
 
     for cam in config.cameras:
         buf = DoubleFrameBuffer()
@@ -49,13 +54,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
-    for name, camera in state.cameras.items():
+    for _name, camera in state.cameras.items():
         camera.stop()
     for buf in state.frame_buffers.values():
         buf.shutdown()
-    for name, ptz in state.ptz_services.items():
+    for _name, ptz in state.ptz_services.items():
         if ptz.is_connected():
             ptz.disconnect()
+    await close_db()
     logger.info("Services shut down")
 
 
@@ -68,6 +74,7 @@ app = FastAPI(
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
+app.include_router(auth_router.router)
 app.include_router(dashboard.router)
 app.include_router(stream_router.router)
 app.include_router(ptz_router.router)
