@@ -406,6 +406,7 @@
         gridMode = true;
         document.getElementById('grid-btn').classList.add('bg-slate-700', 'text-slate-100');
         document.getElementById('status-badge').classList.add('hidden');
+        document.getElementById('fps-display').classList.add('fps-display--grid-hidden');
         stream.disconnect();
         document.getElementById('single-view').classList.add('hidden');
         fadeIn(document.getElementById('grid-view'));
@@ -431,6 +432,7 @@
         gridMode = false;
         document.getElementById('grid-btn').classList.remove('bg-slate-700', 'text-slate-100');
         document.getElementById('status-badge').classList.remove('hidden');
+        document.getElementById('fps-display').classList.remove('fps-display--grid-hidden');
         gridWidget.unmount();
         document.getElementById('grid-view').classList.add('hidden');
         fadeIn(document.getElementById('single-view'));

@@ -75,6 +75,10 @@
     pointer-events: none;
 }
 
+.fps-display--grid-hidden {
+    display: none !important;
+}
+
 .video-spinner {
     width: 2rem;
     height: 2rem;

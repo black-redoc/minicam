@@ -54,7 +54,8 @@ class GridWidget {
             }
 
             const badgeEl   = this.#container.querySelector(`#grid-badge-${i}`);
-            const stream = new VideoStream({ img: imgEl, overlay: overlayEl, badge: badgeEl, cameraName: cam.name });
+            const fpsEl     = this.#container.querySelector(`#grid-fps-${i}`);
+            const stream = new VideoStream({ img: imgEl, overlay: overlayEl, badge: badgeEl, fps: fpsEl, cameraName: cam.name });
             stream.connect();
             this.#streams.set(cam.name, stream);
         });
@@ -112,6 +113,11 @@ class GridWidget {
                 <div id="grid-overlay-${i}" class="video-overlay">
                     <div class="video-spinner"></div>
                 </div>
+                <span id="grid-fps-${i}"
+                      class="absolute top-1 right-1 px-1.5 py-0.5 rounded bg-black/60
+                             text-white text-[10px] font-mono tabular-nums pointer-events-none">
+                    -- FPS
+                </span>
                 <div class="absolute bottom-0 left-0 right-0
                             bg-gradient-to-t from-black/70 to-transparent
                             px-2 py-1.5 pointer-events-none
