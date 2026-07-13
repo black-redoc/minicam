@@ -25,22 +25,33 @@
             <span data-label>Connecting…</span>
         </span>
 
-        <!-- Grid view toggle -->
-        <button id="grid-btn"
+        <!-- View mode toggle: bounces single → grid → stack → grid → single -->
+        <button id="view-btn"
                 type="button"
-                aria-label="Toggle grid view"
+                aria-label="Switch to grid view"
                 title="Grid view"
                 class="hidden flex items-center justify-center w-8 h-8 rounded-lg
                        text-slate-400 hover:text-slate-100 hover:bg-slate-800
                        transition-colors focus:outline-none focus:ring-2
                        focus:ring-sky-500 focus:ring-offset-1 focus:ring-offset-slate-900">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+            <svg id="view-icon-single" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" class="hidden w-4 h-4 pointer-events-none">
+                <rect x="3" y="3" width="18" height="18"/>
+            </svg>
+            <svg id="view-icon-grid" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                  stroke="currentColor" stroke-width="2" stroke-linecap="round"
                  stroke-linejoin="round" class="w-4 h-4 pointer-events-none">
                 <rect x="3" y="3" width="7" height="7"/>
                 <rect x="14" y="3" width="7" height="7"/>
                 <rect x="3" y="14" width="7" height="7"/>
                 <rect x="14" y="14" width="7" height="7"/>
+            </svg>
+            <svg id="view-icon-stack" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" class="hidden w-4 h-4 pointer-events-none">
+                <rect x="3" y="3" width="18" height="8"/>
+                <rect x="3" y="13" width="18" height="8"/>
             </svg>
         </button>
 
@@ -310,6 +321,7 @@
 <script src="{{ url_for('static', path='js/ptz.js') }}"></script>
 <script src="{{ url_for('static', path='js/config.js') }}"></script>
 <script src="{{ url_for('static', path='js/grid.js') }}"></script>
+<script src="{{ url_for('static', path='js/view-cycle.js') }}"></script>
 <script src="{{ url_for('static', path='js/navmenu.js') }}"></script>
 <script>
     const INITIAL_CAMERA = "{{ active_camera }}";
@@ -371,9 +383,18 @@
     observer.observe(document.getElementById('fps-display'), { childList: true });
     if (labelEl) observer.observe(labelEl, { childList: true });
 
-    // ── Grid view ─────────────────────────────────────────────
+    // ── View mode (single / grid / stack) — bounce cycle ─────
     const gridWidget = new GridWidget(document.getElementById('grid-view'));
-    let gridMode = false;
+    // Real starting DOM state is single-view (both containers render "hidden"
+    // until JS un-hides one) — this must reflect that so the first enterGrid()
+    // call below correctly detects "coming from single" and fades grid-view in.
+    let viewState = resetViewState();
+
+    const VIEW_META = {
+        single: { icon: 'view-icon-single', label: 'Single view' },
+        grid:   { icon: 'view-icon-grid',   label: 'Grid view' },
+        stack:  { icon: 'view-icon-stack',  label: 'Stack view' },
+    };
 
     function fadeIn(el) {
         el.classList.remove('hidden');
@@ -388,37 +409,23 @@
         loader.addEventListener('transitionend', () => loader.classList.add('hidden'), { once: true });
     }
 
-    async function syncGridBtn() {
-        const res = await authedFetch('/api/cameras');
-        hideLoader();
-        if (!res.ok) { fadeIn(document.getElementById('single-view')); stream.connect(); return; }
-        const cameras = await res.json();
-        document.getElementById('grid-btn').classList.toggle('hidden', cameras.length < 2);
-        if (cameras.length >= 2) {
-            enterGrid();
-        } else {
-            fadeIn(document.getElementById('single-view'));
-            stream.connect();
-        }
+    function updateViewBtn() {
+        const next = nextViewMode(viewState);
+        const btn  = document.getElementById('view-btn');
+        Object.values(VIEW_META).forEach(({ icon }) =>
+            document.getElementById(icon).classList.add('hidden'));
+        document.getElementById(VIEW_META[next].icon).classList.remove('hidden');
+        btn.title = VIEW_META[next].label;
+        btn.setAttribute('aria-label', `Switch to ${VIEW_META[next].label}`);
+
+        const active = currentViewMode(viewState) !== 'single';
+        btn.classList.toggle('bg-slate-700', active);
+        btn.classList.toggle('text-slate-100', active);
     }
 
-    async function enterGrid() {
-        gridMode = true;
-        document.getElementById('grid-btn').classList.add('bg-slate-700', 'text-slate-100');
-        document.getElementById('status-badge').classList.add('hidden');
-        document.getElementById('fps-display').classList.add('fps-display--grid-hidden');
-        stream.disconnect();
-        document.getElementById('single-view').classList.add('hidden');
-        fadeIn(document.getElementById('grid-view'));
-        const res = await authedFetch('/api/cameras');
-        if (!res.ok) return;
-        const cameras = await res.json();
-        gridWidget.mount(cameras);
-    }
-
-    function exitGrid(switchToName = null) {
-        // Snapshot the last rendered frame from the target camera's grid cell so
-        // the single-view <img> shows it immediately — no blank flash during reconnect.
+    async function enterSingle(switchToName = null) {
+        // Snapshot the last rendered frame from the target camera's cell so the
+        // single-view <img> shows it immediately — no blank flash during reconnect.
         const targetName = switchToName ?? activeCameraName;
         const cell = document.querySelector(`[data-grid-cam="${CSS.escape(targetName)}"]`);
         if (cell) {
@@ -429,8 +436,6 @@
             }
         }
 
-        gridMode = false;
-        document.getElementById('grid-btn').classList.remove('bg-slate-700', 'text-slate-100');
         document.getElementById('status-badge').classList.remove('hidden');
         document.getElementById('fps-display').classList.remove('fps-display--grid-hidden');
         gridWidget.unmount();
@@ -443,11 +448,62 @@
         }
     }
 
-    document.getElementById('grid-btn').addEventListener('click', () => {
-        gridMode ? exitGrid() : enterGrid();
+    /** @param {1|2|3|undefined} cols */
+    async function enterMulti(cols) {
+        const wasSingle = currentViewMode(viewState) === 'single';
+        document.getElementById('status-badge').classList.add('hidden');
+        document.getElementById('fps-display').classList.add('fps-display--grid-hidden');
+        if (wasSingle) {
+            stream.disconnect();
+            document.getElementById('single-view').classList.add('hidden');
+            fadeIn(document.getElementById('grid-view'));
+        }
+        const res = await authedFetch('/api/cameras');
+        if (!res.ok) return;
+        const cameras = await res.json();
+        gridWidget.unmount(); // no-op if nothing mounted; snapshots frames if grid/stack was showing
+        gridWidget.mount(cameras, { cols });
+    }
+
+    function enterGrid()  { return enterMulti(undefined); }
+    function enterStack() { return enterMulti(1); }
+
+    async function goToView(targetMode) {
+        if (targetMode === currentViewMode(viewState)) return;
+        if (targetMode === 'single')      await enterSingle();
+        else if (targetMode === 'stack')  await enterStack();
+        else                              await enterGrid();
+    }
+
+    async function syncGridBtn() {
+        const res = await authedFetch('/api/cameras');
+        hideLoader();
+        if (!res.ok) { fadeIn(document.getElementById('single-view')); stream.connect(); return; }
+        const cameras = await res.json();
+        const multi = cameras.length >= 2;
+        document.getElementById('view-btn').classList.toggle('hidden', !multi);
+        if (multi) {
+            await enterGrid(); // viewState is still 'single' here, so this fades grid-view in
+            viewState = initialViewState();
+        } else {
+            fadeIn(document.getElementById('single-view'));
+            stream.connect();
+        }
+        updateViewBtn();
+    }
+
+    document.getElementById('view-btn').addEventListener('click', async () => {
+        const target = nextViewMode(viewState);
+        await goToView(target);
+        viewState = advanceViewState(viewState);
+        updateViewBtn();
     });
 
-    document.addEventListener('grid:select', (e) => exitGrid(e.detail.name));
+    document.addEventListener('grid:select', async (e) => {
+        await enterSingle(e.detail.name);
+        viewState = resetViewState();
+        updateViewBtn();
+    });
 
     syncGridBtn();
 </script>

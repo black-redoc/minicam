@@ -3,7 +3,8 @@
  *
  * Usage:
  *   const grid = new GridWidget(document.getElementById('grid-view'));
- *   grid.mount([{ name: 'cam1' }, { name: 'cam2' }]);
+ *   grid.mount([{ name: 'cam1' }, { name: 'cam2' }]);   // auto column count
+ *   grid.mount(cameras, { cols: 1 });                    // force 1 column (stack-view)
  *   grid.unmount();
  *
  * Dispatches 'grid:select' on document when a cell is clicked:
@@ -30,12 +31,14 @@ class GridWidget {
      * If a previous frame is stored for a camera it is shown immediately so
      * the cell does not flash black while the WebSocket reconnects.
      * @param {Array<{name: string}>} cameras
+     * @param {{ cols?: 1|2|3 }} [options] - Force a column count (e.g. 1 for
+     *   stack-view). Defaults to the responsive auto column count.
      */
-    mount(cameras) {
+    mount(cameras, { cols } = {}) {
         if (!cameras.length) return;
 
-        const cols     = this.#colCount(cameras.length);
-        const colClass = cols === 1 ? 'grid-cols-1' : cols === 2 ? 'grid-cols-2' : 'grid-cols-3';
+        const c        = cols ?? this.#colCount(cameras.length);
+        const colClass = c === 1 ? 'grid-cols-1' : c === 2 ? 'grid-cols-2' : 'grid-cols-3';
 
         this.#container.innerHTML = `
             <div class="grid ${colClass} gap-px bg-sky-950">
