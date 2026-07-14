@@ -26,6 +26,8 @@ class SecuritySettings:
     stream_token_ttl_seconds: int = _DEFAULT_STREAM_TOKEN_TTL_SECONDS
     db_path: str = str(_DEFAULT_DB_PATH)
     trusted_proxies: frozenset[str] = field(default_factory=frozenset)
+    cf_access_team_domain: str | None = None
+    cf_access_aud: str | None = None
 
 
 def _read_int(env_var: str, default: int) -> int:
@@ -61,4 +63,6 @@ def get_security_settings() -> SecuritySettings:
         ),
         db_path=os.environ.get("MINICAM_DB_PATH", str(_DEFAULT_DB_PATH)),
         trusted_proxies=_read_trusted_proxies("MINICAM_TRUSTED_PROXIES"),
+        cf_access_team_domain=os.environ.get("MINICAM_CF_ACCESS_TEAM_DOMAIN") or None,
+        cf_access_aud=os.environ.get("MINICAM_CF_ACCESS_AUD") or None,
     )

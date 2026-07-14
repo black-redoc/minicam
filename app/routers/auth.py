@@ -10,6 +10,8 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from app.dependencies import (
     SESSION_COOKIE_NAME,
     get_current_user,
+    get_login_rate_limiter,
+    get_network_zone,
     get_password_hasher,
     get_permission_repository,
     get_session_repository,
@@ -30,10 +32,13 @@ from app.repositories.session_repository import SessionRepository
 from app.repositories.user_repository import UserRepository
 from app.security_settings import SecuritySettings, get_security_settings
 from app.services.auth import InvalidSessionTokenError, PasswordHasher, TokenService
+from app.services.login_rate_limiter import LoginRateLimiter
+from app.services.network import NetworkZone
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 _INVALID_CREDENTIALS_MESSAGE = "Invalid email or password"
+_TOO_MANY_ATTEMPTS_MESSAGE = "Too many login attempts, try again later"
 
 
 def _iso8601_after(seconds: int) -> str:
@@ -56,8 +61,17 @@ async def login(
     password_hasher: PasswordHasher = Depends(get_password_hasher),
     token_service: TokenService = Depends(get_token_service),
     settings: SecuritySettings = Depends(get_security_settings),
+    rate_limiter: LoginRateLimiter = Depends(get_login_rate_limiter),
+    network_zone: NetworkZone = Depends(get_network_zone),
 ) -> UserPublic:
     """Verify credentials, open a revocable session, and set the session cookie."""
+    client_ip = request.client.host if request.client else "unknown"
+    rate_limit_key = LoginRateLimiter.make_key(client_ip, body.email)
+    if not await rate_limiter.is_allowed(rate_limit_key):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, _TOO_MANY_ATTEMPTS_MESSAGE
+        )
+
     user = await user_repository.get_by_email(body.email)
     if (
         user is None
@@ -68,22 +82,23 @@ async def login(
 
     jti = uuid.uuid4().hex
     expires_at = _iso8601_after(settings.session_ttl_seconds)
-    client_ip = request.client.host if request.client else None
     await session_repository.create(
         jti, user.id, expires_at, request.headers.get("user-agent"), client_ip
     )
     token = token_service.issue(user.id, jti, settings.session_ttl_seconds)
 
-    # secure=False is deliberate: this app is also served plain-HTTP on the
-    # LAN (see the threat model in the security plan), and a Secure cookie
-    # would stop being sent there once set over HTTPS on WAN.
+    # secure is tied to network_zone, not hardcoded: on WAN the browser always
+    # sees HTTPS (terminated by Cloudflare in front of the tunnel), so the
+    # cookie can and should require it. On LAN this app is deliberately also
+    # served over plain HTTP (see the threat model in the security plan), and
+    # a Secure cookie would silently stop being sent there.
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
         max_age=settings.session_ttl_seconds,
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=(network_zone is NetworkZone.WAN),
         path="/",
     )
     return _to_public(user)

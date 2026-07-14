@@ -1,8 +1,26 @@
+from collections.abc import Generator
+
 import numpy as np
 import pytest
 
 from app.buffers.double_frame_buffer import DoubleFrameBuffer
+from app.dependencies import get_login_rate_limiter
 from app.models.frame import Frame
+
+
+@pytest.fixture(autouse=True)
+def reset_login_rate_limiter() -> Generator[None]:
+    """Give every test a fresh LoginRateLimiter.
+
+    get_login_rate_limiter is a process-wide lru_cache singleton (by design
+    — the limiter must share state across requests within the app). Without
+    this reset, unrelated tests hitting /api/auth/login with the same
+    email+IP combination would silently share a rate-limit window and
+    intermittently 429 each other out.
+    """
+    get_login_rate_limiter.cache_clear()
+    yield
+    get_login_rate_limiter.cache_clear()
 
 
 @pytest.fixture

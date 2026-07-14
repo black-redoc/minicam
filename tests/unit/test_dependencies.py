@@ -15,8 +15,15 @@ from fastapi import HTTPException
 
 from app import dependencies
 from app.models.domain import Session, User
+from app.security_settings import SecuritySettings
 from app.services.auth import InvalidSessionTokenError, SessionTokenPayload
+from app.services.cloudflare_access import (
+    AccessTokenPayload,
+    InvalidAccessTokenError,
+)
 from app.services.network import NetworkZone
+
+_CF_ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion"
 
 _USER = User(
     id=1,
@@ -211,23 +218,143 @@ class TestRequireCanUsePtz:
         assert user is _USER
 
 
+def _request_with_access_header(token: str | None) -> MagicMock:
+    request = MagicMock()
+    request.headers = {_CF_ACCESS_JWT_HEADER: token} if token is not None else {}
+    return request
+
+
 class TestEnforceWanAccessGate:
     async def test_lan_traffic_always_passes(self) -> None:
         wan_gate = AsyncMock()
-        await dependencies.enforce_wan_access_gate(_USER, NetworkZone.LAN, wan_gate)
+        request = _request_with_access_header(None)
+        await dependencies.enforce_wan_access_gate(
+            request, _USER, NetworkZone.LAN, wan_gate, MagicMock()
+        )
         wan_gate.is_active.assert_not_called()
-
-    async def test_wan_traffic_passes_when_gate_active(self) -> None:
-        wan_gate = AsyncMock()
-        wan_gate.is_active.return_value = True
-        await dependencies.enforce_wan_access_gate(_USER, NetworkZone.WAN, wan_gate)
 
     async def test_wan_traffic_raises_403_when_gate_inactive(self) -> None:
         wan_gate = AsyncMock()
         wan_gate.is_active.return_value = False
+        request = _request_with_access_header(None)
         with pytest.raises(HTTPException) as exc_info:
-            await dependencies.enforce_wan_access_gate(_USER, NetworkZone.WAN, wan_gate)
+            await dependencies.enforce_wan_access_gate(
+                request, _USER, NetworkZone.WAN, wan_gate, MagicMock()
+            )
         assert exc_info.value.status_code == 403
+
+    async def test_wan_traffic_raises_403_when_verifier_not_configured(self) -> None:
+        wan_gate = AsyncMock()
+        wan_gate.is_active.return_value = True
+        request = _request_with_access_header(None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await dependencies.enforce_wan_access_gate(
+                request, _USER, NetworkZone.WAN, wan_gate, None
+            )
+        assert exc_info.value.status_code == 403
+
+    async def test_wan_traffic_raises_403_when_access_header_missing(self) -> None:
+        wan_gate = AsyncMock()
+        wan_gate.is_active.return_value = True
+        verifier = MagicMock()
+        request = _request_with_access_header(None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await dependencies.enforce_wan_access_gate(
+                request, _USER, NetworkZone.WAN, wan_gate, verifier
+            )
+        assert exc_info.value.status_code == 403
+        verifier.verify.assert_not_called()
+
+    async def test_wan_traffic_raises_403_when_access_token_invalid(self) -> None:
+        wan_gate = AsyncMock()
+        wan_gate.is_active.return_value = True
+        verifier = MagicMock()
+        verifier.verify.side_effect = InvalidAccessTokenError("bad token")
+        request = _request_with_access_header("token")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await dependencies.enforce_wan_access_gate(
+                request, _USER, NetworkZone.WAN, wan_gate, verifier
+            )
+        assert exc_info.value.status_code == 403
+
+    async def test_wan_traffic_raises_403_when_access_email_does_not_match_session(
+        self,
+    ) -> None:
+        wan_gate = AsyncMock()
+        wan_gate.is_active.return_value = True
+        verifier = MagicMock()
+        verifier.verify.return_value = AccessTokenPayload(
+            email="someone-else@example.com"
+        )
+        request = _request_with_access_header("token")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await dependencies.enforce_wan_access_gate(
+                request, _USER, NetworkZone.WAN, wan_gate, verifier
+            )
+        assert exc_info.value.status_code == 403
+
+    async def test_wan_traffic_passes_when_access_email_matches_session(self) -> None:
+        wan_gate = AsyncMock()
+        wan_gate.is_active.return_value = True
+        verifier = MagicMock()
+        verifier.verify.return_value = AccessTokenPayload(email=_USER.email)
+        request = _request_with_access_header("token")
+
+        await dependencies.enforce_wan_access_gate(
+            request, _USER, NetworkZone.WAN, wan_gate, verifier
+        )
+
+
+class TestGetCloudflareAccessVerifier:
+    def test_returns_none_when_team_domain_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = SecuritySettings(
+            jwt_secret="s",
+            cf_access_team_domain=None,
+            cf_access_aud="aud-tag",
+        )
+        monkeypatch.setattr(dependencies, "get_security_settings", lambda: settings)
+        dependencies.get_cloudflare_access_verifier.cache_clear()
+
+        assert dependencies.get_cloudflare_access_verifier() is None
+        dependencies.get_cloudflare_access_verifier.cache_clear()
+
+    def test_returns_none_when_aud_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = SecuritySettings(
+            jwt_secret="s",
+            cf_access_team_domain="https://myteam.cloudflareaccess.com",
+            cf_access_aud=None,
+        )
+        monkeypatch.setattr(dependencies, "get_security_settings", lambda: settings)
+        dependencies.get_cloudflare_access_verifier.cache_clear()
+
+        assert dependencies.get_cloudflare_access_verifier() is None
+        dependencies.get_cloudflare_access_verifier.cache_clear()
+
+    def test_builds_verifier_when_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = SecuritySettings(
+            jwt_secret="s",
+            cf_access_team_domain="https://myteam.cloudflareaccess.com",
+            cf_access_aud="aud-tag",
+        )
+        monkeypatch.setattr(dependencies, "get_security_settings", lambda: settings)
+        dependencies.get_cloudflare_access_verifier.cache_clear()
+
+        verifier = dependencies.get_cloudflare_access_verifier()
+
+        assert verifier is not None
+        assert verifier._audience == "aud-tag"
+        assert verifier._issuer == "https://myteam.cloudflareaccess.com"
+        dependencies.get_cloudflare_access_verifier.cache_clear()
 
 
 class TestGetNetworkZone:

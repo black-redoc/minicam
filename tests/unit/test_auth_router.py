@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 from app.dependencies import (
     get_current_user,
     get_db_connection,
+    get_login_rate_limiter,
+    get_network_zone,
     get_password_hasher,
     get_permission_repository,
     get_security_settings,
@@ -26,6 +28,8 @@ from app.models.domain import CameraPermission, User
 from app.routers import auth as auth_router
 from app.security_settings import SecuritySettings
 from app.services.auth import InvalidSessionTokenError, SessionTokenPayload
+from app.services.login_rate_limiter import LoginRateLimiter
+from app.services.network import NetworkZone
 
 _USER = User(
     id=1,
@@ -56,6 +60,7 @@ def app() -> FastAPI:
     # (FastAPI resolves every declared dependency up front); give them an
     # inert connection so unrelated repos never hit the real DB singleton.
     test_app.dependency_overrides[get_db_connection] = lambda: MagicMock()
+    test_app.dependency_overrides[get_network_zone] = lambda: NetworkZone.LAN
     return test_app
 
 
@@ -142,6 +147,83 @@ class TestLogin:
             "/api/auth/login", json={"email": _USER.email, "password": "correct"}
         )
         assert "password_hash" not in res.json()
+
+    def test_cookie_is_not_secure_on_lan(self, app: FastAPI) -> None:
+        user_repository = AsyncMock()
+        user_repository.get_by_email.return_value = _USER
+        password_hasher = MagicMock()
+        password_hasher.verify.return_value = True
+        app.dependency_overrides[get_user_repository] = lambda: user_repository
+        app.dependency_overrides[get_password_hasher] = lambda: password_hasher
+        app.dependency_overrides[get_session_repository] = lambda: AsyncMock()
+        app.dependency_overrides[get_security_settings] = lambda: _SETTINGS
+        # get_network_zone already defaults to LAN in the app fixture.
+        client = TestClient(app)
+
+        res = client.post(
+            "/api/auth/login", json={"email": _USER.email, "password": "correct"}
+        )
+        assert res.status_code == 200
+        assert "secure" not in res.headers["set-cookie"].lower()
+
+    def test_cookie_is_secure_on_wan(self, app: FastAPI) -> None:
+        user_repository = AsyncMock()
+        user_repository.get_by_email.return_value = _USER
+        password_hasher = MagicMock()
+        password_hasher.verify.return_value = True
+        app.dependency_overrides[get_user_repository] = lambda: user_repository
+        app.dependency_overrides[get_password_hasher] = lambda: password_hasher
+        app.dependency_overrides[get_session_repository] = lambda: AsyncMock()
+        app.dependency_overrides[get_security_settings] = lambda: _SETTINGS
+        app.dependency_overrides[get_network_zone] = lambda: NetworkZone.WAN
+        client = TestClient(app)
+
+        res = client.post(
+            "/api/auth/login", json={"email": _USER.email, "password": "correct"}
+        )
+        assert res.status_code == 200
+        assert "secure" in res.headers["set-cookie"].lower()
+
+
+class TestLoginRateLimiting:
+    def test_returns_429_once_the_limit_is_exceeded(self, app: FastAPI) -> None:
+        user_repository = AsyncMock()
+        user_repository.get_by_email.return_value = None
+        app.dependency_overrides[get_user_repository] = lambda: user_repository
+        app.dependency_overrides[get_security_settings] = lambda: _SETTINGS
+        # Same shared instance on every resolution — a fresh lambda would
+        # hand back a brand new (and thus always-empty) limiter per request.
+        limiter = LoginRateLimiter(max_attempts=2, window_seconds=900)
+        app.dependency_overrides[get_login_rate_limiter] = lambda: limiter
+        client = TestClient(app)
+        payload = {"email": "attacker@example.com", "password": "wrong"}
+
+        first = client.post("/api/auth/login", json=payload)
+        second = client.post("/api/auth/login", json=payload)
+        third = client.post("/api/auth/login", json=payload)
+
+        assert first.status_code == 401
+        assert second.status_code == 401
+        assert third.status_code == 429
+
+    def test_does_not_query_the_database_once_the_limit_is_exceeded(
+        self, app: FastAPI
+    ) -> None:
+        user_repository = AsyncMock()
+        user_repository.get_by_email.return_value = None
+        app.dependency_overrides[get_user_repository] = lambda: user_repository
+        app.dependency_overrides[get_security_settings] = lambda: _SETTINGS
+        limiter = LoginRateLimiter(max_attempts=1, window_seconds=900)
+        app.dependency_overrides[get_login_rate_limiter] = lambda: limiter
+        client = TestClient(app)
+        payload = {"email": "attacker@example.com", "password": "wrong"}
+
+        client.post("/api/auth/login", json=payload)
+        user_repository.get_by_email.reset_mock()
+        res = client.post("/api/auth/login", json=payload)
+
+        assert res.status_code == 429
+        user_repository.get_by_email.assert_not_called()
 
 
 class TestLogout:

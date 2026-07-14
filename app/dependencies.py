@@ -4,7 +4,10 @@ turns repositories + services into `Depends()`-usable callables.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import aiosqlite
+import jwt
 from fastapi import Cookie, Depends, HTTPException, Request, status
 
 from app.db.connection import get_connection
@@ -25,11 +28,18 @@ from app.repositories.wan_access_repository import (
 from app.security_settings import SecuritySettings, get_security_settings
 from app.services.auth import InvalidSessionTokenError, PasswordHasher, TokenService
 from app.services.authorization import AuthorizationService
+from app.services.cloudflare_access import (
+    CloudflareAccessVerifier,
+    InvalidAccessTokenError,
+)
+from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.network import NetworkZone, classify_network
 from app.services.stream_tokens import StreamTokenService
 from app.services.wan_access import WanAccessGateService
 
 SESSION_COOKIE_NAME = "minicam_session"
+_CF_ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion"
+_CF_ACCESS_JWKS_PATH = "/cdn-cgi/access/certs"
 
 
 def get_db_connection() -> aiosqlite.Connection:
@@ -90,9 +100,40 @@ def get_wan_access_gate_service(
     return WanAccessGateService(wan_access_repository)
 
 
+@lru_cache
+def get_login_rate_limiter() -> LoginRateLimiter:
+    """Build the singleton login rate limiter.
+
+    Must be a single shared instance (lru_cache, like get_security_settings)
+    since it holds in-memory attempt counters that need to persist across
+    requests within this process.
+    """
+    return LoginRateLimiter()
+
+
 def get_network_zone(request: Request) -> NetworkZone:
     settings = get_security_settings()
     return classify_network(request, trusted_proxies=settings.trusted_proxies)
+
+
+@lru_cache
+def get_cloudflare_access_verifier() -> CloudflareAccessVerifier | None:
+    """Build the Cloudflare Access verifier, or None if it is not configured.
+
+    Returns None instead of raising so this stays safe to resolve for every
+    request — including LAN ones, which never use it. enforce_wan_access_gate
+    is the one that turns "not configured" into a fail-closed 403, and only
+    for WAN traffic that actually needs it.
+    """
+    settings = get_security_settings()
+    if not settings.cf_access_team_domain or not settings.cf_access_aud:
+        return None
+    jwks_uri = settings.cf_access_team_domain + _CF_ACCESS_JWKS_PATH
+    return CloudflareAccessVerifier(
+        jwks_client=jwt.PyJWKClient(jwks_uri),
+        audience=settings.cf_access_aud,
+        issuer=settings.cf_access_team_domain,
+    )
 
 
 async def get_current_user(
@@ -163,10 +204,46 @@ async def require_can_use_ptz(
     return user
 
 
+def _require_matching_access_identity(
+    request: Request,
+    user: User,
+    access_verifier: CloudflareAccessVerifier | None,
+) -> None:
+    """Fail closed unless a valid Cloudflare Access JWT names this user."""
+    if access_verifier is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Cloudflare Access is not configured for WAN requests",
+        )
+
+    access_token = request.headers.get(_CF_ACCESS_JWT_HEADER)
+    if access_token is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Missing Cloudflare Access token"
+        )
+
+    try:
+        identity = access_verifier.verify(access_token)
+    except InvalidAccessTokenError as exc:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Invalid Cloudflare Access token"
+        ) from exc
+
+    if identity.email != user.email:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Cloudflare Access identity does not match the session user",
+        )
+
+
 async def enforce_wan_access_gate(
+    request: Request,
     user: User = Depends(get_current_user),
     network_zone: NetworkZone = Depends(get_network_zone),
     wan_access_gate: WanAccessGateService = Depends(get_wan_access_gate_service),
+    access_verifier: CloudflareAccessVerifier | None = Depends(
+        get_cloudflare_access_verifier
+    ),
 ) -> None:
     if network_zone is NetworkZone.LAN:
         return
@@ -174,3 +251,4 @@ async def enforce_wan_access_gate(
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "WAN access is not enabled for this account"
         )
+    _require_matching_access_identity(request, user, access_verifier)

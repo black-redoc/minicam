@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app import state
 from app.buffers.double_frame_buffer import DoubleFrameBuffer
 from app.db.connection import close_db, init_db
+from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.routers import auth as auth_router
 from app.routers import dashboard
 from app.routers import docs as docs_router
@@ -71,6 +72,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
