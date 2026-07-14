@@ -80,7 +80,7 @@ minicam reads `config.toml` at startup. Cameras edited via the UI or API automat
 
 ## Security Settings
 
-Unlike camera config, the security layer (sessions, stream tokens, WAN access) is configured entirely through **environment variables**, read once at startup by `app/security_settings.py`.
+Unlike camera config, the security layer (sessions, stream tokens, WAN access) is configured entirely through **environment variables**, read once at startup by `app/security_settings.py`. See `.env.example` in the project root for the authoritative, up-to-date list with generation instructions — the table below mirrors it.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|--------------|
@@ -89,6 +89,8 @@ Unlike camera config, the security layer (sessions, stream tokens, WAN access) i
 | `MINICAM_STREAM_TOKEN_TTL_SECONDS` | no | `30` | Lifetime of the short-lived token that authorizes one WebSocket handshake. See [Video Streaming](/doc/stream). |
 | `MINICAM_DB_PATH` | no | `app/minicam.db` | Path to the SQLite database storing users, sessions, camera permissions, and WAN access flags. |
 | `MINICAM_TRUSTED_PROXIES` | no | `""` (empty) | Comma-separated list of proxy IPs. Requests arriving through one of these are always classified as WAN — see [Authentication & Authorization](/doc/auth). |
+| `MINICAM_CF_ACCESS_TEAM_DOMAIN` | required for WAN | — | Cloudflare Access team domain, used to fetch the JWKS that verifies the `Cf-Access-Jwt-Assertion` header on WAN requests. |
+| `MINICAM_CF_ACCESS_AUD` | required for WAN | — | Audience (AUD) tag of the Cloudflare Access application protecting this tunnel hostname. |
 
 ## Bootstrapping the First Admin
 

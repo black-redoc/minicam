@@ -19,6 +19,7 @@ _TOPIC_TITLES: dict[str, str] = {
     "overview": "Overview",
     "auth": "Authentication & Authorization",
     "configuration": "Configuration",
+    "cloudflare": "Cloudflare Access & Tunnel",
     "cameras": "Multi-Camera Setup",
     "stream": "Video Streaming",
     "ptz": "PTZ Control",

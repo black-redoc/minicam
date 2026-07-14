@@ -1,0 +1,17 @@
+[Unit]
+Description=minicam FastAPI server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=<user>
+WorkingDirectory=/home/<user>/Development/minicam
+# Real .env, not the .env.example template committed to the repo.
+EnvironmentFile=/home/<user>/Development/minicam/.env
+ExecStart=/home/<user>/.local/bin/uv run fastapi run main.py --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
