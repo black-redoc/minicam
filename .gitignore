@@ -127,3 +127,4 @@ benchmark_results/
 # Locust / load testing
 # =============================================================================
 locust_reports/
+graphify-out/
