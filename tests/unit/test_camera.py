@@ -5,15 +5,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 from av.codec.context import Flags
 
-from app.buffers.double_frame_buffer import DoubleFrameBuffer
+from app.buffers.frame_buffer import FrameBuffer
 from app.services.camera import RTSPCamera, redact_url
 from tests.fixtures.camera import make_frame, make_mock_av_frame
 
 
 def _make_camera(
     url: str = "rtsp://fake/stream",
-) -> tuple[RTSPCamera, DoubleFrameBuffer]:
-    buf = DoubleFrameBuffer()
+) -> tuple[RTSPCamera, FrameBuffer]:
+    buf = FrameBuffer()
     cam = RTSPCamera(rtsp_url=url, buffer=buf)
     return cam, buf
 

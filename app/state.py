@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-from app.buffers.double_frame_buffer import DoubleFrameBuffer
+from app.buffers.frame_buffer import FrameBuffer
 from app.services.camera import RTSPCamera
 from app.services.detection.worker import DetectionSnapshot
 from app.services.ptz import PTZService
 
 cameras: dict[str, RTSPCamera] = {}
 ptz_services: dict[str, PTZService] = {}
-frame_buffers: dict[str, DoubleFrameBuffer] = {}
+frame_buffers: dict[str, FrameBuffer] = {}
 detection_workers: dict[str, asyncio.Task[None]] = {}
 detection_results: dict[str, DetectionSnapshot | None] = {}
 

@@ -144,9 +144,9 @@ def _start_detection(cam_config: CameraConfig) -> None:
 def _start_camera_and_ptz(cam_config: CameraConfig) -> None:
     buf = state.frame_buffers.get(cam_config.name)
     if buf is None:
-        from app.buffers.double_frame_buffer import DoubleFrameBuffer
+        from app.buffers.frame_buffer import FrameBuffer
 
-        buf = DoubleFrameBuffer()
+        buf = FrameBuffer()
         state.frame_buffers[cam_config.name] = buf
 
     camera = RTSPCamera(rtsp_url=cam_config.rtsp_url, buffer=buf)

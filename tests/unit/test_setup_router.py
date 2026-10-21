@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.state as state_module
-from app.buffers.double_frame_buffer import DoubleFrameBuffer
+from app.buffers.frame_buffer import FrameBuffer
 from app.dependencies import require_admin
 from app.models.config import (
     AppConfig,
@@ -337,7 +337,7 @@ class TestStartCameraAndPtz:
                 setup_router._start_camera_and_ptz(cam_config)
 
             buf = state_module.frame_buffers["cam_new"]
-            assert isinstance(buf, DoubleFrameBuffer)
+            assert isinstance(buf, FrameBuffer)
             assert isinstance(state_module.cameras["cam_new"], RTSPCamera)
             assert "cam_new" in state_module.ptz_services
         finally:
@@ -347,7 +347,7 @@ class TestStartCameraAndPtz:
 
     async def test_reuses_existing_buffer(self) -> None:
         cam_config = _make_camera("cam_existing", "192.168.1.21")
-        existing_buf = DoubleFrameBuffer()
+        existing_buf = FrameBuffer()
         state_module.frame_buffers["cam_existing"] = existing_buf
         try:
             with patch.object(setup_router.RTSPCamera, "start"):

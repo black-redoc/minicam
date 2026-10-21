@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-import asyncio
+import functools
 import logging
 import time
+import weakref
 
 import numpy as np
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 
 from app import state
+from app.buffers.frame_buffer import FrameBuffer
 from app.dependencies import (
     enforce_wan_access_gate,
     get_stream_token_service,
@@ -15,16 +17,29 @@ from app.dependencies import (
 )
 from app.models.auth import StreamTokenResponse
 from app.models.domain import User
+from app.models.frame import Frame
 from app.security_settings import SecuritySettings, get_security_settings
 from app.services.detection.base import Detection
 from app.services.detection.draw import draw_detections
 from app.services.encoder import encode_jpeg
+from app.services.shared_encoder import SharedJpegEncoder
 from app.services.stream_tokens import InvalidStreamTokenError, StreamTokenService
 
 router = APIRouter(tags=["stream"])
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL = 1 / 60
+# One encoder per camera buffer, dropped automatically with the buffer when
+# the camera is removed or re-created by the setup router.
+_encoders: weakref.WeakKeyDictionary[FrameBuffer, SharedJpegEncoder] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _encoder_for(buf: FrameBuffer) -> SharedJpegEncoder:
+    encoder = _encoders.get(buf)
+    if encoder is None:
+        encoder = _encoders[buf] = SharedJpegEncoder()
+    return encoder
 
 
 def _draw_and_encode(image: np.ndarray, detections: list[Detection]) -> bytes:
@@ -43,6 +58,21 @@ def _draw_and_encode(image: np.ndarray, detections: list[Detection]) -> bytes:
     if detections:
         image = draw_detections(image, detections)
     return encode_jpeg(image)
+
+
+def _render_frame(camera_name: str, frame: Frame) -> bytes:
+    """Overlay the camera's current, unexpired detections and encode.
+
+    Runs once per frame in the shared encoder's executor thread, so the
+    detection snapshot is looked up here rather than per viewer.
+    """
+    snapshot = state.detection_results.get(camera_name)
+    detections = (
+        snapshot.detections
+        if snapshot is not None and not snapshot.is_expired(time.monotonic())
+        else []
+    )
+    return _draw_and_encode(frame.image, detections)
 
 
 @router.post("/api/stream/{camera_name}/token", response_model=StreamTokenResponse)
@@ -73,16 +103,15 @@ async def stream(
 ) -> None:
     """Stream JPEG frames to the browser over WebSocket.
 
-    Reads from the DoubleFrameBuffer registered for camera_name and sends
-    each new frame as binary JPEG. If state.detection_results has a
-    snapshot for this camera, its boxes are drawn on top before encoding —
-    that snapshot may lag slightly behind the frame being encoded, since
-    the detection worker runs at a lower cadence than capture/encode; this
-    is an accepted approximation. An expired snapshot (stalled or failing
-    detection) is ignored so stale boxes are never drawn. Closes with code
+    Waits on the FrameBuffer registered for camera_name and sends each new
+    frame as binary JPEG; frames this viewer was too slow for are skipped.
+    Every frame is encoded once per camera and shared by all its viewers
+    (SharedJpegEncoder), with the camera's detection boxes drawn on top
+    when there is an unexpired snapshot — that snapshot may lag slightly
+    behind the frame, since the detection worker runs at a lower cadence
+    than capture/encode; this is an accepted approximation. Closes with code
     1008 if the stream token is missing/invalid/expired/for a different
-    camera, or if camera_name is not registered. Drawing and encoding both run in a
-    thread-pool executor to keep the async event loop responsive.
+    camera, or if camera_name is not registered.
     """
     try:
         stream_token_service.verify(token, camera_name)
@@ -101,28 +130,16 @@ async def stream(
     logger.info(
         "Stream client connected: camera=%s client=%s", camera_name, websocket.client
     )
-    loop = asyncio.get_running_loop()
-    last_sequence = -1
+    encoder = _encoder_for(buf)
+    render = functools.partial(_render_frame, camera_name)
+    last_frame: Frame | None = None
 
     try:
         while True:
-            frame = buf.read()
-
-            if frame is not None and frame.sequence != last_sequence:
-                snapshot = state.detection_results.get(camera_name)
-                detections = (
-                    snapshot.detections
-                    if snapshot is not None
-                    and not snapshot.is_expired(time.monotonic())
-                    else []
-                )
-                jpeg = await loop.run_in_executor(
-                    None, _draw_and_encode, frame.image, detections
-                )
-                await websocket.send_bytes(jpeg)
-                last_sequence = frame.sequence
-
-            await asyncio.sleep(_POLL_INTERVAL)
+            frame = await buf.next_frame(last_frame)
+            jpeg = await encoder.encode(frame, render)
+            await websocket.send_bytes(jpeg)
+            last_frame = frame
 
     except WebSocketDisconnect as exc:
         logger.info(

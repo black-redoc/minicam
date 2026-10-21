@@ -7,6 +7,7 @@ from fastapi import FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 import app.state as state_module
+from app.buffers.frame_buffer import FrameBuffer
 from app.dependencies import (
     enforce_wan_access_gate,
     get_db_connection,
@@ -63,11 +64,15 @@ def _app_with_valid_token() -> FastAPI:
     return test_app
 
 
+def _buffer_with(frame: Frame) -> FrameBuffer:
+    buf = FrameBuffer()
+    buf.write(frame)
+    return buf
+
+
 @pytest.fixture
 def client() -> TestClient:
-    mock_buffer = MagicMock()
-    mock_buffer.read.return_value = None
-    state_module.frame_buffers["cam1"] = mock_buffer
+    state_module.frame_buffers["cam1"] = FrameBuffer()
     yield TestClient(_app_with_valid_token())
     state_module.frame_buffers.clear()
 
@@ -79,32 +84,33 @@ class TestWebSocketStream:
 
     def test_sends_jpeg_when_frame_available(self) -> None:
         frame = _make_frame(sequence=1)
-        mock_buffer = MagicMock()
-        mock_buffer.read.return_value = frame
-        state_module.frame_buffers["cam1"] = mock_buffer
+        buf = _buffer_with(frame)
+        state_module.frame_buffers["cam1"] = buf
         client = TestClient(_app_with_valid_token())
         with client.websocket_connect("/ws/stream/cam1?token=valid") as ws:
             data = ws.receive_bytes()
             assert data[:2] == b"\xff\xd8"
         state_module.frame_buffers.clear()
 
-    def test_does_not_send_duplicate_frames(self) -> None:
-        frame = _make_frame(sequence=5)
-        call_count = 0
-
-        def read_side_effect() -> Frame:
-            nonlocal call_count
-            call_count += 1
-            return frame
-
-        mock_buffer = MagicMock()
-        mock_buffer.read.side_effect = read_side_effect
-        state_module.frame_buffers["cam1"] = mock_buffer
-        client = TestClient(_app_with_valid_token())
-        with client.websocket_connect("/ws/stream/cam1?token=valid") as ws:
-            data = ws.receive_bytes()
-            assert data[:2] == b"\xff\xd8"
+    def test_viewers_of_one_camera_share_a_single_encode(self) -> None:
+        state_module.frame_buffers["cam1"] = _buffer_with(_make_frame(sequence=5))
+        # As a context manager, TestClient runs every socket on one event
+        # loop, like uvicorn does in production.
+        with (
+            TestClient(_app_with_valid_token()) as client,
+            patch.object(
+                stream_router, "encode_jpeg", return_value=b"\xff\xd8jpeg"
+            ) as mock_encode,
+        ):
+            with (
+                client.websocket_connect("/ws/stream/cam1?token=valid") as ws1,
+                client.websocket_connect("/ws/stream/cam1?token=valid") as ws2,
+            ):
+                assert ws1.receive_bytes() == b"\xff\xd8jpeg"
+                assert ws2.receive_bytes() == b"\xff\xd8jpeg"
         state_module.frame_buffers.clear()
+
+        mock_encode.assert_called_once()
 
     def test_unknown_camera_closes_connection(self) -> None:
         state_module.frame_buffers.clear()
@@ -150,9 +156,8 @@ class TestWebSocketStreamErrorHandling:
 
     async def test_websocket_disconnect_is_logged_and_swallowed(self) -> None:
         frame = _make_frame(sequence=1)
-        mock_buffer = MagicMock()
-        mock_buffer.read.return_value = frame
-        state_module.frame_buffers["cam1"] = mock_buffer
+        buf = _buffer_with(frame)
+        state_module.frame_buffers["cam1"] = buf
 
         ws = self._make_mock_websocket()
         ws.send_bytes = AsyncMock(side_effect=WebSocketDisconnect(code=1001))
@@ -166,9 +171,8 @@ class TestWebSocketStreamErrorHandling:
 
     async def test_unexpected_exception_is_logged_and_reraised(self) -> None:
         frame = _make_frame(sequence=1)
-        mock_buffer = MagicMock()
-        mock_buffer.read.return_value = frame
-        state_module.frame_buffers["cam1"] = mock_buffer
+        buf = _buffer_with(frame)
+        state_module.frame_buffers["cam1"] = buf
 
         ws = self._make_mock_websocket()
         ws.send_bytes = AsyncMock(side_effect=RuntimeError("socket blew up"))
@@ -193,9 +197,8 @@ class TestWebSocketStreamDetectionOverlay:
 
     def test_no_snapshot_encodes_original_frame_without_drawing(self) -> None:
         frame = _make_frame(sequence=1)
-        mock_buffer = MagicMock()
-        mock_buffer.read.return_value = frame
-        state_module.frame_buffers["cam1"] = mock_buffer
+        buf = _buffer_with(frame)
+        state_module.frame_buffers["cam1"] = buf
         # state_module.detection_results has no entry for "cam1".
 
         client = TestClient(_app_with_valid_token())
@@ -214,9 +217,8 @@ class TestWebSocketStreamDetectionOverlay:
 
     def test_snapshot_with_detections_draws_before_encoding(self) -> None:
         frame = _make_frame(sequence=1)
-        mock_buffer = MagicMock()
-        mock_buffer.read.return_value = frame
-        state_module.frame_buffers["cam1"] = mock_buffer
+        buf = _buffer_with(frame)
+        state_module.frame_buffers["cam1"] = buf
 
         detection = Detection(
             class_name="person", confidence=0.9, x1=1, y1=1, x2=2, y2=2
@@ -246,9 +248,8 @@ class TestWebSocketStreamDetectionOverlay:
 
     def test_snapshot_with_empty_detections_skips_drawing(self) -> None:
         frame = _make_frame(sequence=1)
-        mock_buffer = MagicMock()
-        mock_buffer.read.return_value = frame
-        state_module.frame_buffers["cam1"] = mock_buffer
+        buf = _buffer_with(frame)
+        state_module.frame_buffers["cam1"] = buf
         state_module.detection_results["cam1"] = DetectionSnapshot(
             detections=[], sequence=1
         )
@@ -269,9 +270,8 @@ class TestWebSocketStreamDetectionOverlay:
 
     def test_expired_snapshot_is_not_drawn(self) -> None:
         frame = _make_frame(sequence=1)
-        mock_buffer = MagicMock()
-        mock_buffer.read.return_value = frame
-        state_module.frame_buffers["cam1"] = mock_buffer
+        buf = _buffer_with(frame)
+        state_module.frame_buffers["cam1"] = buf
         detection = Detection(
             class_name="person", confidence=0.9, x1=1, y1=1, x2=2, y2=2
         )

@@ -3,7 +3,7 @@ from collections.abc import Generator
 import numpy as np
 import pytest
 
-from app.buffers.double_frame_buffer import DoubleFrameBuffer
+from app.buffers.frame_buffer import FrameBuffer
 from app.dependencies import get_login_rate_limiter
 from app.models.frame import Frame
 
@@ -42,6 +42,6 @@ def sample_frame(sample_image: np.ndarray) -> Frame:
 
 
 @pytest.fixture
-def frame_buffer() -> DoubleFrameBuffer:
-    """Return an empty DoubleFrameBuffer."""
-    return DoubleFrameBuffer()
+def frame_buffer() -> FrameBuffer:
+    """Return an empty FrameBuffer."""
+    return FrameBuffer()

@@ -9,7 +9,7 @@ from urllib.parse import urlsplit, urlunsplit
 import av
 from av.codec.context import Flags
 
-from app.buffers.double_frame_buffer import DoubleFrameBuffer
+from app.buffers.frame_buffer import FrameBuffer
 from app.services.decoder import decode_video_frame
 
 logger = logging.getLogger(__name__)
@@ -52,17 +52,17 @@ def redact_url(url: str) -> str:
 
 
 class RTSPCamera:
-    """RTSP stream reader that pushes decoded frames to a DoubleFrameBuffer.
+    """RTSP stream reader that pushes decoded frames to a FrameBuffer.
 
     Single producer: only the internal background thread writes to the buffer.
     Uses ThreadPoolExecutor to avoid raw threading.Thread management.
 
     Args:
         rtsp_url: Full RTSP URL including credentials.
-        buffer: The DoubleFrameBuffer to push frames into.
+        buffer: The FrameBuffer to push frames into.
     """
 
-    def __init__(self, rtsp_url: str, buffer: DoubleFrameBuffer) -> None:
+    def __init__(self, rtsp_url: str, buffer: FrameBuffer) -> None:
         self._rtsp_url = rtsp_url
         # The full URL embeds camera credentials: only this redacted form
         # may ever reach a log line.
