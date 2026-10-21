@@ -137,4 +137,6 @@ POST /api/auth/setup   { "email": "...", "password": "..." }   (password min. 8 
 - `409` — any account already exists. Setup can succeed only once: the emptiness check and the insert are a single atomic SQL statement (`SQLiteUserRepository.create_first_admin`), so two concurrent requests can't both win.
 - `403` — the request was classified as WAN. First-run setup is LAN-only so an unconfigured device can't be claimed by whoever reaches it first through the Cloudflare tunnel.
 
+The new admin starts with **no camera permissions** (camera access is deny-by-default for admins too), so the next step is granting yourself **View** and **PTZ** in `/admin` — see [Grant yourself camera permissions](/doc/configuration#grant-yourself-camera-permissions).
+
 The CLI remains available as an alternative (for example on a headless install). See [Configuration](/doc/configuration#bootstrapping-the-first-admin).

@@ -24,10 +24,24 @@ for details and how to rotate it.
 ### Start the development server
 
 ```bash
-uv run fastapi dev
+uv run fastapi dev --host 0.0.0.0
 ```
 
-Visit http://localhost:8000
+Visit `http://<this-machine's-LAN-IP>:8000` (e.g. `http://192.168.1.20:8000`).
+`--host 0.0.0.0` makes the server reachable from the local network; without it
+`fastapi dev` only listens on `127.0.0.1`. Use the LAN IP rather than
+`localhost`/`127.0.0.1`: with `MINICAM_TRUSTED_PROXIES=127.0.0.1` (the
+`.env.example` default, needed for the Cloudflare tunnel) every request from
+`127.0.0.1` is treated as WAN, so first-run setup is refused there and WAN
+rules apply.
+
+### First login
+
+1. On a fresh database, `/login` shows **Create admin account**: create your
+   admin user (see [Bootstrapping the First Admin](app/docs/configuration.md#bootstrapping-the-first-admin)).
+2. Admins don't see any camera by default. Open **`/admin`** and, in your user's
+   card, tick **View** and **PTZ** for each camera (each checkbox saves
+   immediately). Reload the dashboard and the streams connect.
 
 ## Checks
 

@@ -127,7 +127,7 @@ Every new install needs its own `MINICAM_JWT_SECRET` before the first start — 
 
 ## Bootstrapping the First Admin
 
-On a fresh install (empty database), open `http://<device-ip>:8080/login` from the local network: instead of the sign-in form it shows **Create admin account**. Enter an email and a password (min. 8 characters); that account becomes the administrator and you are signed in. Every later visit to `/login` shows only the normal sign-in form. This form is refused over WAN (the Cloudflare tunnel), so do this step on the device's network.
+On a fresh install (empty database), open `http://<device-ip>:8080/login` from the local network (in development, `http://<device-ip>:8000/login` with the server started as `uv run fastapi dev --host 0.0.0.0` — plain `fastapi dev` only listens on `127.0.0.1`). Use the device's LAN IP, not `localhost`/`127.0.0.1`: with `MINICAM_TRUSTED_PROXIES=127.0.0.1` every request from `127.0.0.1` is treated as coming through the tunnel (WAN), and setup is refused with "Setup is only available from the local network". Instead of the sign-in form it shows **Create admin account**. Enter an email and a password (min. 8 characters); that account becomes the administrator and you are signed in. Every later visit to `/login` shows only the normal sign-in form. This form is refused over WAN (the Cloudflare tunnel), so do this step on the device's network.
 
 Alternatively, create the first admin out-of-band with the CLI:
 
@@ -136,3 +136,14 @@ uv run python -m app.cli.create_user --email admin@example.com --admin
 ```
 
 Omit `--password` to be prompted interactively instead of passing it on the command line. See [Authentication & Authorization](/doc/auth) for how sessions and permissions work after that first login.
+
+### Grant yourself camera permissions
+
+Camera access is deny-by-default for **every** account, admins included: a new admin sees no cameras, and the dashboard shows **Unauthorized** on the stream. After the first login:
+
+1. Open **`/admin`** (link in the dashboard menu).
+2. In **Users & camera permissions**, find your user's card. It lists every configured camera.
+3. Tick **View** (watch the stream) and **PTZ** (pan/tilt/zoom controls) for each camera you want. Each checkbox is saved immediately.
+4. Reload the dashboard.
+
+Repeat this for every camera you add later, and for every other user.
