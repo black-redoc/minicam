@@ -68,7 +68,9 @@ sudo systemctl enable --now minicam.service
 ```
 
 `cloudflared` (the tunnel that exposes this instance to WAN through
-Cloudflare Access) is supervised separately. If you installed it with
+Cloudflare Access) is supervised separately. To set it up from scratch
+(install, tunnel, hostname, Access policy, `.env` values), follow
+[Cloudflare Access & Tunnel → Setup](app/docs/cloudflare.md#setup-step-by-step). If you installed it with
 `cloudflared service install <token>`, it already registered its own
 `cloudflared.service` unit (enabled, `Restart=on-failure`) — there is
 nothing to add in this repo for it. Check with:
