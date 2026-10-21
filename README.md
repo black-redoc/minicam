@@ -29,14 +29,6 @@ uv run fastapi dev
 
 Visit http://localhost:8000
 
-### Deploy to FastAPI Cloud
-
-Sign up and log in at https://fastapicloud.com, then deploy with:
-
-```bash
-uv run fastapi deploy
-```
-
 ## Checks
 
 CI (`.github/workflows/ci.yml`) runs on every push to `master` and every pull
