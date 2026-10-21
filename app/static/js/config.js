@@ -12,8 +12,9 @@
  */
 /* exported ConfigWidget */
 
-const CAMERAS_API  = '/api/cameras';
-const DISCOVER_API = '/api/setup/discover';
+const CAMERAS_API           = '/api/cameras';
+const DISCOVER_API          = '/api/setup/discover';
+const DETECTION_CLASSES_API = '/api/detection/classes';
 
 class ConfigWidget {
     #modalEl
@@ -253,7 +254,7 @@ class ConfigWidget {
 
     // ── Form view ────────────────────────────────────────────
 
-    #showFormView(camera) {
+    async #showFormView(camera) {
         this.#editingCamera = camera;
         this.#innerEl.innerHTML = this.#buildFormShell(camera);
 
@@ -271,6 +272,8 @@ class ConfigWidget {
         requestAnimationFrame(() => {
             this.#innerEl.querySelector('input, select')?.focus();
         });
+
+        await this.#loadDetectionClasses(camera);
     }
 
     #buildFormShell(camera) {
@@ -388,6 +391,13 @@ class ConfigWidget {
                         </select>
                     </div>
 
+                    <div class="flex flex-col gap-1.5">
+                        <span class="text-xs text-slate-400 font-medium">Object detection</span>
+                        <div data-detection-classes aria-live="polite">
+                            ${this.#spinnerHtml('Loading detection classes…')}
+                        </div>
+                    </div>
+
                 </form>
             </div>
             <div class="flex items-center justify-between gap-2 px-5 py-4
@@ -423,9 +433,53 @@ class ConfigWidget {
         // password is intentionally left blank — backend keeps existing value when empty
     }
 
+    async #loadDetectionClasses(camera) {
+        const container = this.#innerEl.querySelector('[data-detection-classes]');
+        if (!container) return;
+
+        try {
+            const res = await authedFetch(DETECTION_CLASSES_API);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const { classes } = await res.json();
+            this.#renderDetectionClasses(classes, camera, container);
+        } catch {
+            container.innerHTML =
+                '<p class="text-xs text-red-400">Could not load detection classes.</p>';
+        }
+    }
+
+    #renderDetectionClasses(classes, camera, container) {
+        if (classes.length === 0) {
+            container.innerHTML =
+                '<p class="text-xs text-slate-500">No detection backend configured on this device.</p>';
+            return;
+        }
+
+        const selected = new Set(camera?.detection_classes ?? []);
+
+        container.innerHTML = `
+            <div class="max-h-40 overflow-y-auto flex flex-col gap-1.5 rounded-lg
+                        border border-slate-700 bg-slate-900/40 px-3 py-2">
+                ${classes.map((cls, i) => `
+                    <label for="cfg-detect-${i}"
+                           class="flex items-center gap-2 text-sm text-slate-300">
+                        <input id="cfg-detect-${i}" type="checkbox"
+                               class="accent-sky-500"
+                               data-detection-class-checkbox
+                               value="${this.#esc(cls)}"
+                               ${selected.has(cls) ? 'checked' : ''}>
+                        ${this.#esc(cls)}
+                    </label>
+                `).join('')}
+            </div>
+        `;
+    }
+
     #collectFormData() {
-        const f      = this.#innerEl.querySelector('[data-config-form]');
-        const nameEl = f.querySelector('[name="name"]');
+        const f                = this.#innerEl.querySelector('[data-config-form]');
+        const nameEl           = f.querySelector('[name="name"]');
+        const detectionClasses = [...f.querySelectorAll('[data-detection-class-checkbox]:checked')]
+            .map((el) => el.value);
         return {
             ...(nameEl ? { name: nameEl.value.trim() } : {}),
             host:       f.querySelector('[name="host"]').value.trim(),
@@ -435,6 +489,7 @@ class ConfigWidget {
             password:   f.querySelector('[name="password"]').value,
             channel:    Number(f.querySelector('[name="channel"]').value),
             stream:     f.querySelector('[name="stream"]').value,
+            detection_classes: detectionClasses,
         };
     }
 
@@ -475,13 +530,16 @@ class ConfigWidget {
                 );
             }
 
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.ok) {
+                const body = await res.json().catch(() => null);
+                throw new Error(body?.detail ?? '');
+            }
             await this.#onCamerasChanged();
             if (!isNew) this.#onCameraUpdated(oldName, data.name);
             this.#showListView();
-        } catch {
+        } catch (err) {
             if (errorEl) {
-                errorEl.textContent = 'Failed to save. Please try again.';
+                errorEl.textContent = err.message || 'Failed to save. Please try again.';
                 errorEl.classList.remove('hidden');
             }
         } finally {

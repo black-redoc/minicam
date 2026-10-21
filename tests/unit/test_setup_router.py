@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import asyncio
+from collections.abc import AsyncIterator
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,10 +16,17 @@ from fastapi.testclient import TestClient
 import app.state as state_module
 from app.buffers.double_frame_buffer import DoubleFrameBuffer
 from app.dependencies import require_admin
-from app.models.config import AppConfig, CameraConfig, DiscoveredCamera
+from app.models.config import (
+    AppConfig,
+    CameraConfig,
+    CameraConfigRequest,
+    DetectionConfig,
+    DiscoveredCamera,
+)
 from app.models.domain import User
 from app.routers import setup as setup_router
 from app.services.camera import RTSPCamera
+from app.services.detection.base import Detection
 
 _ADMIN = User(
     id=1,
@@ -27,8 +39,50 @@ _ADMIN = User(
 )
 
 
-def _make_camera(name: str = "cam1", host: str = "192.168.1.10") -> CameraConfig:
-    return CameraConfig(name=name, host=host, password="secret")
+class _FakeDetectionBackend:
+    """Backend double whose available_classes is fully controlled per test."""
+
+    def __init__(self, available_classes: tuple[str, ...] = ("person", "car")) -> None:
+        self._available_classes = available_classes
+
+    @property
+    def available_classes(self) -> tuple[str, ...]:
+        return self._available_classes
+
+    def detect(
+        self, image: np.ndarray, allowed_classes: frozenset[str]
+    ) -> list[Detection]:
+        return []
+
+
+class _FakeDetectionBuffer:
+    """Buffer double that never reports a frame — enough to exercise a
+    DetectionWorker's task lifecycle without a running camera."""
+
+    def read(self) -> None:
+        return None
+
+    def shutdown(self) -> None:
+        pass
+
+
+async def _cleanup_detection(name: str) -> None:
+    """Cancel and clear any worker task left behind by a test."""
+    await setup_router._stop_detection(name)
+    state_module.frame_buffers.pop(name, None)
+
+
+def _make_camera(
+    name: str = "cam1",
+    host: str = "192.168.1.10",
+    detection_classes: list[str] | None = None,
+) -> CameraConfig:
+    return CameraConfig(
+        name=name,
+        host=host,
+        password="secret",
+        detection_classes=detection_classes or [],
+    )
 
 
 def _make_app_config(*cameras: CameraConfig) -> AppConfig:
@@ -331,3 +385,718 @@ class TestDiscover:
         data = res.json()
         assert len(data) == 1
         assert data[0]["host"] == "192.168.1.50"
+
+
+class TestStartDetection:
+    async def test_creates_worker_task_when_backend_available(self) -> None:
+        cam_config = _make_camera("cam_det_start", detection_classes=["person"])
+        state_module.frame_buffers["cam_det_start"] = _FakeDetectionBuffer()
+        backend = _FakeDetectionBackend()
+        try:
+            with patch.object(
+                setup_router, "get_detection_backend", return_value=backend
+            ):
+                setup_router._start_detection(cam_config)
+
+            task = state_module.detection_workers.get("cam_det_start")
+            assert isinstance(task, asyncio.Task)
+            assert not task.done()
+        finally:
+            await _cleanup_detection("cam_det_start")
+
+    async def test_no_task_when_detection_classes_empty(self) -> None:
+        cam_config = _make_camera("cam_det_empty")
+        with patch.object(setup_router, "get_detection_backend") as mock_get_backend:
+            setup_router._start_detection(cam_config)
+
+        mock_get_backend.assert_not_called()
+        assert "cam_det_empty" not in state_module.detection_workers
+
+    async def test_logs_warning_and_skips_when_no_backend(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cam_config = _make_camera("cam_det_no_backend", detection_classes=["person"])
+        with (
+            patch.object(setup_router, "get_detection_backend", return_value=None),
+            caplog.at_level("WARNING"),
+        ):
+            setup_router._start_detection(cam_config)
+
+        assert "cam_det_no_backend" not in state_module.detection_workers
+        assert any(
+            "no detection backend is active" in record.message
+            for record in caplog.records
+        )
+
+
+class TestStopDetection:
+    async def test_cancels_and_clears_running_task(self) -> None:
+        async def _spin_forever() -> None:
+            await asyncio.sleep(1000)
+
+        task = asyncio.create_task(_spin_forever())
+        state_module.detection_workers["cam_det_stop"] = task
+        state_module.detection_results["cam_det_stop"] = None
+
+        await setup_router._stop_detection("cam_det_stop")
+
+        assert "cam_det_stop" not in state_module.detection_workers
+        assert "cam_det_stop" not in state_module.detection_results
+        assert task.done()
+        assert task.cancelled()
+
+    async def test_is_noop_when_nothing_running(self) -> None:
+        assert "cam_det_ghost" not in state_module.detection_workers
+        await setup_router._stop_detection("cam_det_ghost")  # must not raise
+        assert "cam_det_ghost" not in state_module.detection_workers
+
+
+class TestCreateCameraDetectionHook:
+    _body: dict[str, object] = {
+        "name": "cam_det_create_hook",
+        "host": "10.0.0.11",
+        "rtsp_port": 554,
+        "onvif_port": 80,
+        "user": "admin",
+        "password": "pass",
+        "channel": 1,
+        "stream": "main",
+        "detection_classes": ["person"],
+    }
+
+    def test_calls_start_detection(self, client: TestClient) -> None:
+        mock_start_detection = MagicMock()
+        with (
+            patch.object(setup_router, "add_camera"),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+            patch.object(setup_router, "_start_detection", mock_start_detection),
+            patch.object(
+                setup_router,
+                "get_detection_backend",
+                return_value=_FakeDetectionBackend(),
+            ),
+        ):
+            res = client.post("/api/cameras", json=self._body)
+
+        assert res.status_code == 201
+        mock_start_detection.assert_called_once()
+
+    def test_response_includes_detection_classes(self, client: TestClient) -> None:
+        with (
+            patch.object(setup_router, "add_camera"),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+            patch.object(setup_router, "_start_detection"),
+            patch.object(
+                setup_router,
+                "get_detection_backend",
+                return_value=_FakeDetectionBackend(),
+            ),
+        ):
+            res = client.post("/api/cameras", json=self._body)
+
+        assert res.json()["detection_classes"] == ["person"]
+
+
+class TestEditCameraDetectionHook:
+    _body: dict[str, object] = {
+        "name": "cam1",
+        "host": "10.0.0.99",
+        "rtsp_port": 554,
+        "onvif_port": 80,
+        "user": "admin",
+        "password": "newpass",
+        "channel": 1,
+        "stream": "main",
+        "detection_classes": ["person"],
+    }
+
+    def test_calls_stop_and_start_detection(self, client: TestClient) -> None:
+        mock_stop_detection = AsyncMock()
+        mock_start_detection = MagicMock()
+        with (
+            patch.object(setup_router, "update_camera"),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+            patch.object(setup_router, "_stop_detection", mock_stop_detection),
+            patch.object(setup_router, "_start_detection", mock_start_detection),
+            patch.object(
+                setup_router,
+                "get_detection_backend",
+                return_value=_FakeDetectionBackend(),
+            ),
+        ):
+            res = client.put("/api/cameras/cam1", json=self._body)
+
+        assert res.status_code == 200
+        mock_stop_detection.assert_awaited_once_with("cam1")
+        mock_start_detection.assert_called_once()
+
+
+class TestDeleteCameraDetectionHook:
+    def test_calls_stop_detection(self, client: TestClient) -> None:
+        mock_stop_detection = AsyncMock()
+        with (
+            patch.object(setup_router, "remove_camera"),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_stop_detection", mock_stop_detection),
+        ):
+            res = client.delete("/api/cameras/cam1")
+
+        assert res.status_code == 200
+        mock_stop_detection.assert_awaited_once_with("cam1")
+
+
+class TestDetectionClassValidation:
+    def test_create_camera_returns_400_for_unknown_class(
+        self, client: TestClient
+    ) -> None:
+        backend = _FakeDetectionBackend(available_classes=("car",))
+        body = {
+            "name": "cam_bad_class",
+            "host": "10.0.0.12",
+            "password": "pass",
+            "detection_classes": ["person"],
+        }
+        with patch.object(setup_router, "get_detection_backend", return_value=backend):
+            res = client.post("/api/cameras", json=body)
+
+        assert res.status_code == 400
+        assert "person" in res.json()["detail"]
+
+    def test_create_camera_allows_unknown_class_without_backend(
+        self, client: TestClient
+    ) -> None:
+        body = {
+            "name": "cam_no_backend",
+            "host": "10.0.0.13",
+            "password": "pass",
+            "detection_classes": ["person"],
+        }
+        with (
+            patch.object(setup_router, "add_camera"),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+            patch.object(setup_router, "_start_detection"),
+            patch.object(setup_router, "get_detection_backend", return_value=None),
+        ):
+            res = client.post("/api/cameras", json=body)
+
+        assert res.status_code == 201
+
+    def test_edit_camera_returns_400_for_unknown_class(
+        self, client: TestClient
+    ) -> None:
+        backend = _FakeDetectionBackend(available_classes=("car",))
+        body = {
+            "name": "cam1",
+            "host": "10.0.0.99",
+            "password": "newpass",
+            "detection_classes": ["person"],
+        }
+        with patch.object(setup_router, "get_detection_backend", return_value=backend):
+            res = client.put("/api/cameras/cam1", json=body)
+
+        assert res.status_code == 400
+        assert "person" in res.json()["detail"]
+
+
+class TestRenameCameraWithDetection:
+    async def test_moves_worker_to_new_name(self) -> None:
+        old_name = "cam_rename_det_src"
+        new_name = "cam_rename_det_dst"
+        state_module.frame_buffers[old_name] = _FakeDetectionBuffer()
+        state_module.frame_buffers[new_name] = _FakeDetectionBuffer()
+        backend = _FakeDetectionBackend()
+        body = CameraConfigRequest(
+            name=new_name,
+            host="10.0.0.50",
+            password="pass",
+            detection_classes=["person"],
+        )
+
+        try:
+            with (
+                patch.object(setup_router, "update_camera"),
+                patch.object(setup_router, "get_config"),
+                patch.object(setup_router, "_start_camera_and_ptz"),
+                patch.object(
+                    setup_router, "get_detection_backend", return_value=backend
+                ),
+            ):
+                old_cam_config = _make_camera(old_name, detection_classes=["person"])
+                setup_router._start_detection(old_cam_config)
+                old_task = state_module.detection_workers[old_name]
+
+                await setup_router.edit_camera(old_name, body)
+
+            assert old_name not in state_module.detection_workers
+            assert old_name not in state_module.detection_results
+            assert old_task.cancelled()
+            assert new_name in state_module.detection_workers
+        finally:
+            await _cleanup_detection(old_name)
+            await _cleanup_detection(new_name)
+
+
+class TestEditCameraClearsDetection:
+    async def test_stops_worker_when_classes_cleared(self) -> None:
+        name = "cam_clear_det"
+        state_module.frame_buffers[name] = _FakeDetectionBuffer()
+        backend = _FakeDetectionBackend()
+        old_cam_config = _make_camera(name, detection_classes=["person"])
+
+        with patch.object(setup_router, "get_detection_backend", return_value=backend):
+            setup_router._start_detection(old_cam_config)
+        old_task = state_module.detection_workers[name]
+
+        body = CameraConfigRequest(name=name, host="10.0.0.60", password="pass")
+
+        try:
+            with (
+                patch.object(setup_router, "update_camera"),
+                patch.object(setup_router, "get_config"),
+                patch.object(setup_router, "_start_camera_and_ptz"),
+                patch.object(
+                    setup_router, "get_detection_backend", return_value=backend
+                ),
+            ):
+                await setup_router.edit_camera(name, body)
+
+            assert name not in state_module.detection_workers
+            assert name not in state_module.detection_results
+            assert old_task.cancelled()
+        finally:
+            await _cleanup_detection(name)
+
+
+class TestDeleteCameraWithDetection:
+    async def test_stops_worker(self) -> None:
+        name = "cam_delete_det"
+        state_module.frame_buffers[name] = _FakeDetectionBuffer()
+        backend = _FakeDetectionBackend()
+        cam_config = _make_camera(name, detection_classes=["person"])
+
+        with patch.object(setup_router, "get_detection_backend", return_value=backend):
+            setup_router._start_detection(cam_config)
+        task = state_module.detection_workers[name]
+
+        try:
+            with (
+                patch.object(setup_router, "remove_camera"),
+                patch.object(setup_router, "get_config"),
+            ):
+                await setup_router.delete_camera(name)
+
+            assert name not in state_module.detection_workers
+            assert name not in state_module.detection_results
+            assert task.cancelled()
+        finally:
+            await _cleanup_detection(name)
+            state_module.frame_buffers.pop(name, None)
+
+
+class TestGetDetectionSettings:
+    def test_returns_200(self, client: TestClient) -> None:
+        config = AppConfig(detection=DetectionConfig())
+        with patch.object(setup_router, "get_config", return_value=config):
+            res = client.get("/api/detection/settings")
+        assert res.status_code == 200
+
+    def test_returns_current_detection_config(self, client: TestClient) -> None:
+        config = AppConfig(
+            detection=DetectionConfig(backend="onnx", model_path="/models/yolo.onnx")
+        )
+        with patch.object(setup_router, "get_config", return_value=config):
+            res = client.get("/api/detection/settings")
+        assert res.json()["backend"] == "onnx"
+        assert res.json()["model_path"] == "/models/yolo.onnx"
+
+
+class TestUpdateDetectionSettings:
+    _valid_body: dict[str, object] = {
+        "backend": "none",
+        "model_path": "",
+        "confidence_threshold": 0.5,
+        "inference_fps": 3.0,
+    }
+
+    def test_returns_400_when_onnx_model_path_is_relative(
+        self, client: TestClient
+    ) -> None:
+        body = {**self._valid_body, "backend": "onnx", "model_path": "relative.onnx"}
+        res = client.put("/api/detection/settings", json=body)
+        assert res.status_code == 400
+
+    def test_returns_400_when_onnx_model_path_does_not_exist(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        body = {
+            **self._valid_body,
+            "backend": "onnx",
+            "model_path": str(tmp_path / "missing.onnx"),
+        }
+        res = client.put("/api/detection/settings", json=body)
+        assert res.status_code == 400
+
+    def test_success_persists_and_clears_caches(self, client: TestClient) -> None:
+        persisted = AppConfig(detection=DetectionConfig(backend="none"))
+        mock_update = MagicMock(return_value=persisted)
+        mock_get_config = MagicMock(return_value=AppConfig())
+        mock_get_backend = MagicMock(return_value=None)
+        with (
+            patch.object(setup_router, "update_detection_config", mock_update),
+            patch.object(setup_router, "get_config", mock_get_config),
+            patch.object(setup_router, "get_detection_backend", mock_get_backend),
+        ):
+            res = client.put("/api/detection/settings", json=self._valid_body)
+
+        assert res.status_code == 200
+        mock_update.assert_called_once()
+        mock_get_config.cache_clear.assert_called_once()
+        mock_get_backend.cache_clear.assert_called_once()
+
+    def test_success_with_valid_onnx_model_path(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        model_path = tmp_path / "model.onnx"
+        model_path.write_bytes(b"fake model")
+        body = {**self._valid_body, "backend": "onnx", "model_path": str(model_path)}
+        persisted = AppConfig(
+            detection=DetectionConfig(backend="onnx", model_path=str(model_path))
+        )
+        with (
+            patch.object(
+                setup_router, "update_detection_config", return_value=persisted
+            ),
+            patch.object(setup_router, "get_config", return_value=AppConfig()),
+            patch.object(setup_router, "get_detection_backend", MagicMock()),
+        ):
+            res = client.put("/api/detection/settings", json=body)
+
+        assert res.status_code == 200
+        assert res.json()["model_path"] == str(model_path)
+
+    def test_restarts_active_detection_workers(self, client: TestClient) -> None:
+        cam_with_detection = CameraConfig(
+            name="cam_with_det",
+            host="10.0.0.5",
+            password="pass",
+            detection_classes=["person"],
+        )
+        config_after_update = AppConfig(
+            cameras=[cam_with_detection], detection=DetectionConfig()
+        )
+        mock_stop = AsyncMock()
+        mock_start = MagicMock()
+        with (
+            patch.object(
+                setup_router,
+                "update_detection_config",
+                return_value=config_after_update,
+            ),
+            patch.object(setup_router, "get_config", return_value=config_after_update),
+            patch.object(setup_router, "get_detection_backend", MagicMock()),
+            patch.object(setup_router, "_stop_detection", mock_stop),
+            patch.object(setup_router, "_start_detection", mock_start),
+        ):
+            res = client.put("/api/detection/settings", json=self._valid_body)
+
+        assert res.status_code == 200
+        mock_stop.assert_awaited_once_with("cam_with_det")
+        mock_start.assert_called_once_with(cam_with_detection)
+
+    def test_does_not_restart_cameras_without_detection_classes(
+        self, client: TestClient
+    ) -> None:
+        cam_without_detection = CameraConfig(
+            name="cam_no_det", host="10.0.0.6", password="pass"
+        )
+        config_after_update = AppConfig(
+            cameras=[cam_without_detection], detection=DetectionConfig()
+        )
+        mock_stop = AsyncMock()
+        mock_start = MagicMock()
+        with (
+            patch.object(
+                setup_router,
+                "update_detection_config",
+                return_value=config_after_update,
+            ),
+            patch.object(setup_router, "get_config", return_value=config_after_update),
+            patch.object(setup_router, "get_detection_backend", MagicMock()),
+            patch.object(setup_router, "_stop_detection", mock_stop),
+            patch.object(setup_router, "_start_detection", mock_start),
+        ):
+            res = client.put("/api/detection/settings", json=self._valid_body)
+
+        assert res.status_code == 200
+        mock_stop.assert_not_awaited()
+        mock_start.assert_not_called()
+
+
+class TestUploadDetectionModel:
+    def test_saves_file_with_sanitized_name(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with patch.object(setup_router, "_MODELS_DIR", tmp_path):
+            res = client.post(
+                "/api/detection/model",
+                files={
+                    "file": (
+                        "model.onnx",
+                        b"fake onnx bytes",
+                        "application/octet-stream",
+                    )
+                },
+            )
+
+        assert res.status_code == 200
+        saved_path = tmp_path / "model.onnx"
+        assert saved_path.exists()
+        assert saved_path.read_bytes() == b"fake onnx bytes"
+        assert res.json()["model_path"] == str(saved_path)
+
+    def test_rejects_wrong_extension(self, client: TestClient, tmp_path: Path) -> None:
+        with patch.object(setup_router, "_MODELS_DIR", tmp_path):
+            res = client.post(
+                "/api/detection/model",
+                files={"file": ("model.txt", b"not onnx", "text/plain")},
+            )
+
+        assert res.status_code == 400
+
+    def test_rejects_oversized_upload(self, client: TestClient, tmp_path: Path) -> None:
+        oversized = b"x" * 100
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router, "_MAX_MODEL_UPLOAD_BYTES", 10),
+            patch.object(setup_router, "_MODEL_UPLOAD_CHUNK_BYTES", 10),
+        ):
+            res = client.post(
+                "/api/detection/model",
+                files={"file": ("model.onnx", oversized, "application/octet-stream")},
+            )
+
+        assert res.status_code == 400
+        assert not (tmp_path / "model.onnx").exists()
+
+    def test_sanitizes_path_traversal_filename(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with patch.object(setup_router, "_MODELS_DIR", tmp_path):
+            res = client.post(
+                "/api/detection/model",
+                files={
+                    "file": (
+                        "../../etc/evil.onnx",
+                        b"fake onnx bytes",
+                        "application/octet-stream",
+                    )
+                },
+            )
+
+        assert res.status_code == 200
+        assert res.json()["model_path"] == str(tmp_path / "evil.onnx")
+        assert (tmp_path / "evil.onnx").exists()
+        assert not (tmp_path.parent / "etc").exists()
+
+
+class _FakeFetchResponse:
+    """Minimal async-iterable stand-in for an httpx streaming response."""
+
+    def __init__(self, status_code: int, chunks: list[bytes]) -> None:
+        self.status_code = status_code
+        self._chunks = chunks
+
+    async def aiter_bytes(self, chunk_size: int) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FakeStreamCtx:
+    def __init__(
+        self, response: _FakeFetchResponse | None, error: Exception | None
+    ) -> None:
+        self._response = response
+        self._error = error
+
+    async def __aenter__(self) -> _FakeFetchResponse:
+        if self._error is not None:
+            raise self._error
+        assert self._response is not None
+        return self._response
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+class _FakeAsyncClient:
+    """Stand-in for httpx.AsyncClient, used as both the class and the instance."""
+
+    def __init__(
+        self,
+        response: _FakeFetchResponse | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._response = response
+        self._error = error
+        self.called = False
+
+    def __call__(self, *args: object, **kwargs: object) -> _FakeAsyncClient:
+        self.called = True
+        return self
+
+    async def __aenter__(self) -> _FakeAsyncClient:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+    def stream(self, method: str, url: str) -> _FakeStreamCtx:
+        return _FakeStreamCtx(self._response, self._error)
+
+
+class TestFetchDetectionModel:
+    def test_downloads_and_saves_file(self, client: TestClient, tmp_path: Path) -> None:
+        chunks = [b"fake ", b"onnx bytes"]
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, chunks))
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/models/model.onnx"},
+            )
+
+        assert res.status_code == 200
+        saved_path = tmp_path / "model.onnx"
+        assert saved_path.exists()
+        assert saved_path.read_bytes() == b"fake onnx bytes"
+        assert res.json()["model_path"] == str(saved_path)
+
+    def test_rejects_non_https_url(self, client: TestClient, tmp_path: Path) -> None:
+        fake = _FakeAsyncClient()
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "http://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 400
+        assert fake.called is False
+
+    def test_rejects_non_200_response(self, client: TestClient, tmp_path: Path) -> None:
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(404, []))
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 502
+        assert not (tmp_path / "model.onnx").exists()
+
+    def test_rejects_oversized_download(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [b"x" * 20]))
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router, "_MAX_MODEL_UPLOAD_BYTES", 10),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 400
+        assert not (tmp_path / "model.onnx").exists()
+
+    def test_rejects_non_onnx_filename(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        fake = _FakeAsyncClient()
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.txt"},
+            )
+
+        assert res.status_code == 400
+        assert fake.called is False
+
+    def test_rejects_url_without_filename(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        fake = _FakeAsyncClient()
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/"},
+            )
+
+        assert res.status_code == 400
+        assert fake.called is False
+
+    def test_translates_network_error(self, client: TestClient, tmp_path: Path) -> None:
+        fake = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 502
+        assert not (tmp_path / "model.onnx").exists()
+
+    def test_sanitizes_path_traversal_filename(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [b"fake onnx bytes"]))
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/../../etc/evil.onnx"},
+            )
+
+        assert res.status_code == 200
+        assert res.json()["model_path"] == str(tmp_path / "evil.onnx")
+
+
+class TestDetectionClassesEndpoint:
+    def test_returns_classes_when_backend_available(self, client: TestClient) -> None:
+        backend = _FakeDetectionBackend(available_classes=("person", "car"))
+        with patch.object(setup_router, "get_detection_backend", return_value=backend):
+            res = client.get("/api/detection/classes")
+
+        assert res.status_code == 200
+        assert sorted(res.json()["classes"]) == ["car", "person"]
+
+    def test_returns_empty_list_without_backend(self, client: TestClient) -> None:
+        with patch.object(setup_router, "get_detection_backend", return_value=None):
+            res = client.get("/api/detection/classes")
+
+        assert res.status_code == 200
+        assert res.json() == {"classes": []}

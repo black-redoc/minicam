@@ -174,3 +174,15 @@ class TestAdminPage:
         res = client.get("/admin")
         assert res.status_code == 200
         assert "text/html" in res.headers["content-type"]
+
+
+class TestAiDetectionPage:
+    def test_requires_admin(self, client: TestClient) -> None:
+        res = client.get("/ai-detection")
+        assert res.status_code == 401  # require_admin -> get_current_user -> 401
+
+    def test_returns_200_for_admin(self, client: TestClient) -> None:
+        client.app.dependency_overrides[require_admin] = lambda: _ADMIN
+        res = client.get("/ai-detection")
+        assert res.status_code == 200
+        assert "text/html" in res.headers["content-type"]

@@ -27,6 +27,7 @@ module.exports = [
       "app/static/js/ptz.js",
       "app/static/js/config.js",
       "app/static/js/admin.js",
+      "app/static/js/ai-detection.js",
     ],
     languageOptions: {
       globals: {

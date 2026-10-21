@@ -1,3 +1,5 @@
+import asyncio
+import functools
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -17,6 +19,8 @@ from app.routers import setup as setup_router
 from app.routers import stream as stream_router
 from app.security_settings import get_security_settings
 from app.services.camera import RTSPCamera
+from app.services.detection.factory import get_detection_backend
+from app.services.detection.worker import DetectionWorker
 from app.services.ptz import PTZConfig, PTZService
 from app.settings import get_config
 
@@ -53,8 +57,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         )
         logger.info("RTSP camera started — name: %s host: %s", cam.name, cam.host)
 
+        if cam.detection_classes:
+            backend = get_detection_backend()
+            if backend is None:
+                logger.warning(
+                    "Camera %r requests detection classes %s but no detection "
+                    "backend is active — detection disabled for this camera",
+                    cam.name,
+                    cam.detection_classes,
+                )
+            else:
+                worker = DetectionWorker(
+                    camera_name=cam.name,
+                    buffer=buf,
+                    backend=backend,
+                    allowed_classes=frozenset(cam.detection_classes),
+                    interval_seconds=1 / config.detection.inference_fps,
+                    on_result=functools.partial(
+                        state.detection_results.__setitem__, cam.name
+                    ),
+                )
+                state.detection_workers[cam.name] = asyncio.create_task(worker.run())
+
     yield
 
+    for task in state.detection_workers.values():
+        task.cancel()
+    await asyncio.gather(*state.detection_workers.values(), return_exceptions=True)
     for _name, camera in state.cameras.items():
         camera.stop()
     for buf in state.frame_buffers.values():

@@ -57,3 +57,14 @@ async def admin_page(
     endpoints — see app/static/js/admin.js.
     """
     return templates.TemplateResponse(request=request, name="admin.html")
+
+
+@router.get("/ai-detection", response_class=HTMLResponse)
+async def ai_detection_page(
+    request: Request, _admin: User = Depends(require_admin)
+) -> HTMLResponse:
+    """Serve the AI detection settings page shell. All data (backend,
+    model path, confidence threshold, inference FPS) loads client-side via
+    the existing /api/detection/* endpoints — see app/static/js/ai-detection.js.
+    """
+    return templates.TemplateResponse(request=request, name="ai_detection.html")

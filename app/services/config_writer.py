@@ -7,7 +7,7 @@ from pathlib import Path
 
 import tomli_w
 
-from app.models.config import AppConfig, CameraConfig
+from app.models.config import AppConfig, CameraConfig, DetectionConfig
 
 _CONFIG_PATH: Path = Path(__file__).resolve().parent.parent.parent / "config.toml"
 
@@ -22,7 +22,10 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
         return AppConfig()
     app_section = data.get("app", {})
     cameras = data.get("cameras", [])
-    return AppConfig.model_validate({**app_section, "cameras": cameras})
+    detection_section = data.get("detection", {})
+    return AppConfig.model_validate(
+        {**app_section, "cameras": cameras, "detection": detection_section}
+    )
 
 
 def save_config(config: AppConfig, path: Path = _CONFIG_PATH) -> None:
@@ -35,6 +38,7 @@ def save_config(config: AppConfig, path: Path = _CONFIG_PATH) -> None:
             "debug": config.debug,
         },
         "cameras": cameras,
+        "detection": config.detection.model_dump(),
     }
     path.write_bytes(tomli_w.dumps(doc).encode())
     path.chmod(0o600)
@@ -70,5 +74,15 @@ def remove_camera(name: str, path: Path = _CONFIG_PATH) -> AppConfig:
     config.cameras = [c for c in config.cameras if c.name != name]
     if len(config.cameras) == original_count:
         raise KeyError(f"Camera '{name}' not found")
+    save_config(config, path)
+    return config
+
+
+def update_detection_config(
+    detection: DetectionConfig, path: Path = _CONFIG_PATH
+) -> AppConfig:
+    """Replace the detection config section and persist it."""
+    config = load_config(path)
+    config.detection = detection
     save_config(config, path)
     return config

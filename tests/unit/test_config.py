@@ -6,8 +6,15 @@ from pathlib import Path
 
 import pytest
 import tomli_w
+from pydantic import ValidationError
 
-from app.models.config import AppConfig, CameraConfig
+from app.models.config import (
+    AppConfig,
+    CameraConfig,
+    CameraConfigRequest,
+    CameraConfigResponse,
+    DetectionConfig,
+)
 from app.settings import get_config
 
 
@@ -49,6 +56,10 @@ class TestAppConfigDefaults:
         config = AppConfig()
         assert config.cameras == []
 
+    def test_default_detection_is_default_detection_config(self) -> None:
+        config = AppConfig()
+        assert config.detection == DetectionConfig()
+
 
 class TestCameraConfigDefaults:
     def test_default_rtsp_port(self) -> None:
@@ -70,6 +81,92 @@ class TestCameraConfigDefaults:
     def test_default_stream(self) -> None:
         cam = _make_camera()
         assert cam.stream == "main"
+
+    def test_default_detection_classes_is_empty(self) -> None:
+        cam = _make_camera()
+        assert cam.detection_classes == []
+
+    def test_detection_classes_accepts_list(self) -> None:
+        cam = _make_camera(detection_classes=["person", "dog"])
+        assert cam.detection_classes == ["person", "dog"]
+
+
+class TestDetectionClassesSerialization:
+    def test_camera_config_round_trips_detection_classes(self) -> None:
+        cam = _make_camera(detection_classes=["person"])
+        restored = CameraConfig.model_validate(cam.model_dump())
+        assert restored.detection_classes == ["person"]
+
+    def test_response_default_detection_classes_is_empty(self) -> None:
+        response = CameraConfigResponse(
+            name="cam1",
+            host="10.0.0.1",
+            rtsp_port=554,
+            onvif_port=80,
+            user="admin",
+            password="secret",
+            channel=1,
+            stream="main",
+        )
+        assert response.detection_classes == []
+
+    def test_response_accepts_detection_classes(self) -> None:
+        response = CameraConfigResponse(
+            name="cam1",
+            host="10.0.0.1",
+            rtsp_port=554,
+            onvif_port=80,
+            user="admin",
+            password="secret",
+            channel=1,
+            stream="main",
+            detection_classes=["cat"],
+        )
+        assert response.detection_classes == ["cat"]
+
+    def test_request_default_detection_classes_is_empty(self) -> None:
+        request = CameraConfigRequest(name="cam1", host="10.0.0.1")
+        assert request.detection_classes == []
+
+    def test_request_accepts_detection_classes(self) -> None:
+        request = CameraConfigRequest(
+            name="cam1", host="10.0.0.1", detection_classes=["person", "car"]
+        )
+        assert request.detection_classes == ["person", "car"]
+
+
+class TestDetectionConfigDefaults:
+    def test_default_backend_is_none(self) -> None:
+        detection = DetectionConfig()
+        assert detection.backend == "none"
+
+    def test_default_model_path_is_empty(self) -> None:
+        detection = DetectionConfig()
+        assert detection.model_path == ""
+
+    def test_default_confidence_threshold(self) -> None:
+        detection = DetectionConfig()
+        assert detection.confidence_threshold == 0.5
+
+    def test_default_inference_fps(self) -> None:
+        detection = DetectionConfig()
+        assert detection.inference_fps == 3.0
+
+    def test_confidence_threshold_above_one_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            DetectionConfig(confidence_threshold=1.1)
+
+    def test_confidence_threshold_below_zero_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            DetectionConfig(confidence_threshold=-0.1)
+
+    def test_inference_fps_zero_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            DetectionConfig(inference_fps=0.0)
+
+    def test_inference_fps_negative_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            DetectionConfig(inference_fps=-1.0)
 
 
 class TestRtspUrl:
@@ -145,6 +242,32 @@ class TestGetConfig:
         assert len(result.cameras) == 1
         assert result.cameras[0].name == "cam1"
         assert result.cameras[0].host == "10.0.0.1"
+
+    def test_loads_detection_section(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        _write_toml(
+            path,
+            {
+                "app": {"host": "0.0.0.0", "port": 8080, "debug": False},
+                "detection": {
+                    "backend": "onnx",
+                    "model_path": "/models/yolo.onnx",
+                    "confidence_threshold": 0.7,
+                    "inference_fps": 5.0,
+                },
+            },
+        )
+        result = get_config(str(path))
+        assert result.detection.backend == "onnx"
+        assert result.detection.model_path == "/models/yolo.onnx"
+        assert result.detection.confidence_threshold == 0.7
+        assert result.detection.inference_fps == 5.0
+
+    def test_detection_defaults_when_section_absent(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        _write_toml(path, {"app": {"host": "0.0.0.0", "port": 8080, "debug": False}})
+        result = get_config(str(path))
+        assert result.detection == DetectionConfig()
 
     def test_is_cached(self, tmp_path: Path) -> None:
         path = tmp_path / "config.toml"

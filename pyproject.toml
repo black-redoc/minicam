@@ -6,6 +6,7 @@ dependencies = [
     "av==17.1.0",
     "fastapi[standard]==0.138.1",
     "numpy==2.5.0",
+    "onnxruntime==1.27.0",
     "onvif-zeep==0.2.12",
     "simplejpeg==1.9.0",
     "tomli-w==1.1.0",
@@ -50,6 +51,7 @@ extend-immutable-calls = [
     "fastapi.Depends",
     "fastapi.Query",
     "fastapi.Cookie",
+    "fastapi.File",
 ]
 
 [tool.ruff.format]
@@ -63,6 +65,10 @@ plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 module = ["av.*", "onvif.*", "zeep.*", "simplejpeg", "markdown", "wsdiscovery"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["onnxruntime.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

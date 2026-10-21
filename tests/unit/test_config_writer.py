@@ -9,13 +9,14 @@ import pytest
 import tomli_w
 
 import app.services.config_writer as config_writer_module
-from app.models.config import AppConfig, CameraConfig
+from app.models.config import AppConfig, CameraConfig, DetectionConfig
 from app.services.config_writer import (
     add_camera,
     load_config,
     remove_camera,
     save_config,
     update_camera,
+    update_detection_config,
 )
 
 
@@ -97,6 +98,46 @@ class TestSaveConfig:
         content = path.read_text()
         assert "rtsp_url" not in content
 
+    def test_writes_detection_section(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        config = AppConfig(
+            detection=DetectionConfig(
+                backend="onnx",
+                model_path="/models/yolo.onnx",
+                confidence_threshold=0.6,
+                inference_fps=4.0,
+            )
+        )
+        save_config(config, path)
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+        assert data["detection"]["backend"] == "onnx"
+        assert data["detection"]["model_path"] == "/models/yolo.onnx"
+        assert data["detection"]["confidence_threshold"] == 0.6
+        assert data["detection"]["inference_fps"] == 4.0
+
+
+class TestDetectionRoundTrip:
+    def test_round_trips_detection_config(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        original = AppConfig(
+            detection=DetectionConfig(
+                backend="onnx",
+                model_path="/models/yolo.onnx",
+                confidence_threshold=0.6,
+                inference_fps=4.0,
+            )
+        )
+        save_config(original, path)
+        restored = load_config(path)
+        assert restored.detection == original.detection
+
+    def test_missing_detection_section_uses_defaults(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        _write_toml(path, {"app": {"host": "0.0.0.0", "port": 8080, "debug": False}})
+        restored = load_config(path)
+        assert restored.detection == DetectionConfig()
+
 
 class TestAddCamera:
     def test_adds_camera(self, toml_file: Path) -> None:
@@ -131,3 +172,31 @@ class TestRemoveCamera:
     def test_raises_key_error_for_missing_name(self, toml_file: Path) -> None:
         with pytest.raises(KeyError, match="ghost"):
             remove_camera("ghost", toml_file)
+
+
+class TestUpdateDetectionConfig:
+    def test_creates_detection_section_when_absent(self, toml_file: Path) -> None:
+        detection = DetectionConfig(backend="onnx", model_path="/models/yolo.onnx")
+        result = update_detection_config(detection, toml_file)
+        assert result.detection == detection
+
+    def test_persists_to_disk(self, toml_file: Path) -> None:
+        detection = DetectionConfig(backend="onnx", model_path="/models/yolo.onnx")
+        update_detection_config(detection, toml_file)
+        reloaded = load_config(toml_file)
+        assert reloaded.detection == detection
+
+    def test_updates_existing_detection_section(self, toml_file: Path) -> None:
+        update_detection_config(
+            DetectionConfig(backend="onnx", model_path="/a.onnx"), toml_file
+        )
+        updated = update_detection_config(
+            DetectionConfig(backend="onnx", model_path="/b.onnx"), toml_file
+        )
+        assert updated.detection.model_path == "/b.onnx"
+
+    def test_preserves_cameras(self, toml_file: Path) -> None:
+        detection = DetectionConfig(backend="onnx", model_path="/models/yolo.onnx")
+        result = update_detection_config(detection, toml_file)
+        assert len(result.cameras) == 1
+        assert result.cameras[0].name == "cam1"

@@ -21,4 +21,7 @@ def get_config(path: str = str(_CONFIG_PATH)) -> AppConfig:
         data = tomllib.load(f)
     app_section = data.get("app", {})
     cameras = data.get("cameras", [])
-    return AppConfig.model_validate({**app_section, "cameras": cameras})
+    detection_section = data.get("detection", {})
+    return AppConfig.model_validate(
+        {**app_section, "cameras": cameras, "detection": detection_section}
+    )

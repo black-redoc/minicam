@@ -16,6 +16,7 @@ class CameraConfig(BaseModel):
     password: str = ""
     channel: int = 1
     stream: Literal["main", "sub"] = "main"
+    detection_classes: list[str] = Field(default_factory=list)
 
     # The pydantic.mypy plugin does not special-case @computed_field stacked
     # on @property in this pydantic/mypy version combination, so mypy's core
@@ -31,11 +32,21 @@ class CameraConfig(BaseModel):
         )
 
 
+class DetectionConfig(BaseModel):
+    """Object detection engine configuration, persisted in config.toml."""
+
+    backend: Literal["none", "onnx"] = "none"
+    model_path: str = ""
+    confidence_threshold: float = Field(0.5, ge=0.0, le=1.0)
+    inference_fps: float = Field(3.0, gt=0.0)
+
+
 class AppConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8080
     debug: bool = False
     cameras: list[CameraConfig] = Field(default_factory=list)
+    detection: DetectionConfig = Field(default_factory=DetectionConfig)
 
 
 class CameraConfigResponse(BaseModel):
@@ -49,6 +60,7 @@ class CameraConfigResponse(BaseModel):
     password: str
     channel: int
     stream: Literal["main", "sub"]
+    detection_classes: list[str] = Field(default_factory=list)
 
 
 class CameraConfigRequest(BaseModel):
@@ -62,6 +74,7 @@ class CameraConfigRequest(BaseModel):
     password: str = ""
     channel: int = Field(1, ge=1)
     stream: Literal["main", "sub"] = "main"
+    detection_classes: list[str] = Field(default_factory=list)
 
 
 class DiscoveredCamera(BaseModel):
@@ -71,3 +84,15 @@ class DiscoveredCamera(BaseModel):
     name: str
     hardware: str
     location: str
+
+
+class DetectionClassesResponse(BaseModel):
+    """Class names the active detection backend can recognize."""
+
+    classes: list[str] = Field(default_factory=list)
+
+
+class ModelFetchRequest(BaseModel):
+    """Request body to fetch a .onnx model from a remote URL."""
+
+    url: str
