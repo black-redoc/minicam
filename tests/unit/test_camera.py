@@ -1,10 +1,12 @@
+import logging
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
 from av.codec.context import Flags
 
 from app.buffers.double_frame_buffer import DoubleFrameBuffer
-from app.services.camera import RTSPCamera
+from app.services.camera import RTSPCamera, redact_url
 from tests.fixtures.camera import make_frame, make_mock_av_frame
 
 
@@ -269,3 +271,59 @@ class TestRTSPOptions:
         from app.services.camera import _RTSP_OPTIONS
 
         assert _RTSP_OPTIONS["fflags"] == "nobuffer"
+
+
+class TestRedactUrl:
+    def test_removes_user_and_password(self) -> None:
+        assert (
+            redact_url("rtsp://admin:s3cret@10.0.0.5:554/h264/ch1/main/av_stream")
+            == "rtsp://***@10.0.0.5:554/h264/ch1/main/av_stream"
+        )
+
+    def test_url_without_credentials_is_unchanged(self) -> None:
+        assert redact_url("rtsp://10.0.0.5/stream") == "rtsp://10.0.0.5/stream"
+
+    def test_unparseable_url_is_fully_masked(self) -> None:
+        assert redact_url("rtsp://admin:pw@host:notaport/x") == "<unparseable url>"
+
+
+class TestCredentialsNeverLogged:
+    _URL = "rtsp://admin:s3cret@10.0.0.5:554/stream"
+
+    def test_capture_error_log_redacts_url_in_exception_message(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cam, _ = _make_camera(self._URL)
+        cam._running = True
+
+        def fail_then_stop() -> None:
+            cam._running = False
+            raise ConnectionError(f"Connection refused: '{self._URL}'")
+
+        with (
+            caplog.at_level(logging.DEBUG, logger="app.services.camera"),
+            patch.object(cam, "_capture_stream", side_effect=fail_then_stop),
+        ):
+            cam._capture_loop()
+
+        assert "rtsp://***@10.0.0.5:554/stream" in caplog.text
+        assert "s3cret" not in caplog.text
+        assert all(record.exc_info is None for record in caplog.records)
+
+    def test_stream_opened_log_redacts_url(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cam, _ = _make_camera(self._URL)
+        cam._running = True
+        mock_container = MagicMock()
+        mock_container.streams = [MagicMock(type="video", codec_context=MagicMock())]
+        mock_container.demux.return_value = []
+
+        with (
+            caplog.at_level(logging.DEBUG, logger="app.services.camera"),
+            patch("app.services.camera.av.open", return_value=mock_container),
+        ):
+            cam._capture_stream()
+
+        assert "RTSP stream opened" in caplog.text
+        assert "s3cret" not in caplog.text

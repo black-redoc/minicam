@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from typing import cast
+from urllib.parse import urlsplit, urlunsplit
 
 import av
 from av.codec.context import Flags
@@ -36,6 +37,20 @@ _STALL_TIMEOUT_SECONDS = 15.0
 _av_io_lock = threading.Lock()
 
 
+def redact_url(url: str) -> str:
+    """Return url with any userinfo (user:password@) removed, safe to log."""
+    try:
+        parts = urlsplit(url)
+        netloc = parts.hostname or ""
+        if parts.port is not None:
+            netloc = f"{netloc}:{parts.port}"
+    except ValueError:
+        return "<unparseable url>"
+    if parts.username is None and parts.password is None:
+        return url
+    return urlunsplit(parts._replace(netloc=f"***@{netloc}"))
+
+
 class RTSPCamera:
     """RTSP stream reader that pushes decoded frames to a DoubleFrameBuffer.
 
@@ -49,6 +64,9 @@ class RTSPCamera:
 
     def __init__(self, rtsp_url: str, buffer: DoubleFrameBuffer) -> None:
         self._rtsp_url = rtsp_url
+        # The full URL embeds camera credentials: only this redacted form
+        # may ever reach a log line.
+        self._log_url = redact_url(rtsp_url)
         self._buffer = buffer
         self._running = False
         self._connected = False
@@ -114,20 +132,27 @@ class RTSPCamera:
         while self._running:
             try:
                 self._capture_stream()
-            except Exception:
-                logger.error("RTSP capture error on %s", self._rtsp_url, exc_info=True)
+            except Exception as exc:
+                # No exc_info: PyAV/FFmpeg errors embed the full URL (with
+                # credentials) in their message, so a traceback would leak it.
+                logger.error(
+                    "RTSP capture error on %s: %s: %s",
+                    self._log_url,
+                    type(exc).__name__,
+                    str(exc).replace(self._rtsp_url, self._log_url),
+                )
             else:
                 if self._running:
                     logger.warning(
                         "RTSP stream for %s ended without an error "
                         "(demuxer stopped yielding packets)",
-                        self._rtsp_url,
+                        self._log_url,
                     )
             self._connected = False
             if self._running:
                 logger.warning(
                     "Reconnecting to %s in %.1fs",
-                    self._rtsp_url,
+                    self._log_url,
                     _RECONNECT_DELAY_SECONDS,
                 )
                 time.sleep(_RECONNECT_DELAY_SECONDS)
@@ -157,7 +182,7 @@ class RTSPCamera:
 
         try:
             self._connected = True
-            logger.info("RTSP stream opened: %s", self._rtsp_url)
+            logger.info("RTSP stream opened: %s", self._log_url)
 
             for packet in self._container.demux(video_stream):
                 if not self._running:
