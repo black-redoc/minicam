@@ -69,7 +69,9 @@ def _make_worker(
     backend: _FakeBackend,
     on_result: Callable[[DetectionSnapshot], None],
     interval_seconds: float = 0.01,
+    clock: Callable[[], float] | None = None,
 ) -> DetectionWorker:
+    extra: dict[str, Callable[[], float]] = {} if clock is None else {"clock": clock}
     return DetectionWorker(
         camera_name="cam1",
         buffer=buffer,  # type: ignore[arg-type]
@@ -77,6 +79,7 @@ def _make_worker(
         allowed_classes=_ALLOWED_CLASSES,
         interval_seconds=interval_seconds,
         on_result=on_result,
+        **extra,
     )
 
 
@@ -113,6 +116,54 @@ class TestDetectionSnapshot:
     def test_has_no_dict_due_to_slots(self) -> None:
         snapshot = DetectionSnapshot(detections=[], sequence=1)
         assert not hasattr(snapshot, "__dict__")
+
+
+class TestDetectionSnapshotExpiry:
+    def test_defaults_to_never_expiring(self) -> None:
+        snapshot = DetectionSnapshot(detections=[], sequence=1)
+        assert snapshot.is_expired(1e12) is False
+
+    def test_expires_at_deadline(self) -> None:
+        snapshot = DetectionSnapshot(detections=[], sequence=1, expires_at=10.0)
+        assert snapshot.is_expired(9.9) is False
+        assert snapshot.is_expired(10.0) is True
+
+    def test_expires_at_is_not_part_of_equality(self) -> None:
+        a = DetectionSnapshot(detections=[], sequence=1, expires_at=1.0)
+        b = DetectionSnapshot(detections=[], sequence=1, expires_at=2.0)
+        assert a == b
+
+
+class TestDetectionWorkerSnapshotTtl:
+    async def test_uses_minimum_ttl_for_fast_cadence(self) -> None:
+        buffer = _FakeBuffer()
+        buffer.set_frame(sequence=1)
+        worker = _make_worker(
+            buffer, _FakeBackend(), lambda _: None, clock=lambda: 100.0
+        )
+
+        snapshot = await worker._process_next_frame(asyncio.get_running_loop())
+
+        assert snapshot is not None
+        assert snapshot.expires_at == pytest.approx(101.0)
+
+    async def test_ttl_scales_with_interval_and_inference_time(self) -> None:
+        buffer = _FakeBuffer()
+        buffer.set_frame(sequence=1)
+        times = iter([100.0, 100.5])
+        worker = _make_worker(
+            buffer,
+            _FakeBackend(),
+            lambda _: None,
+            interval_seconds=2.0,
+            clock=lambda: next(times),
+        )
+
+        snapshot = await worker._process_next_frame(asyncio.get_running_loop())
+
+        # 3 periods of (2.0s sleep + 0.5s inference), counted from the end.
+        assert snapshot is not None
+        assert snapshot.expires_at == pytest.approx(100.5 + 3 * 2.5)
 
 
 class TestDetectionWorkerRun:

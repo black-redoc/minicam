@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -906,8 +906,14 @@ class TestUploadDetectionModel:
 class _FakeFetchResponse:
     """Minimal async-iterable stand-in for an httpx streaming response."""
 
-    def __init__(self, status_code: int, chunks: list[bytes]) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        chunks: list[bytes],
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.status_code = status_code
+        self.headers = headers or {}
         self._chunks = chunks
 
     async def aiter_bytes(self, chunk_size: int) -> AsyncIterator[bytes]:
@@ -933,19 +939,27 @@ class _FakeStreamCtx:
 
 
 class _FakeAsyncClient:
-    """Stand-in for httpx.AsyncClient, used as both the class and the instance."""
+    """Stand-in for httpx.AsyncClient, used as both the class and the instance.
+
+    `response` answers every URL; `routes` answers per URL (for redirects).
+    """
 
     def __init__(
         self,
         response: _FakeFetchResponse | None = None,
         error: Exception | None = None,
+        routes: dict[str, _FakeFetchResponse] | None = None,
     ) -> None:
         self._response = response
         self._error = error
+        self._routes = routes or {}
         self.called = False
+        self.client_kwargs: dict[str, object] = {}
+        self.requested_urls: list[str] = []
 
     def __call__(self, *args: object, **kwargs: object) -> _FakeAsyncClient:
         self.called = True
+        self.client_kwargs = kwargs
         return self
 
     async def __aenter__(self) -> _FakeAsyncClient:
@@ -955,9 +969,22 @@ class _FakeAsyncClient:
         return False
 
     def stream(self, method: str, url: str) -> _FakeStreamCtx:
-        return _FakeStreamCtx(self._response, self._error)
+        self.requested_urls.append(url)
+        return _FakeStreamCtx(self._routes.get(url, self._response), self._error)
 
 
+_PUBLIC_IP = "93.184.215.14"
+
+
+@pytest.fixture()
+def resolve_host() -> Iterator[AsyncMock]:
+    """Resolve every host to a public IP unless a test overrides it."""
+    mock = AsyncMock(return_value=[_PUBLIC_IP])
+    with patch.object(setup_router, "_resolve_host", mock):
+        yield mock
+
+
+@pytest.mark.usefixtures("resolve_host")
 class TestFetchDetectionModel:
     def test_downloads_and_saves_file(self, client: TestClient, tmp_path: Path) -> None:
         chunks = [b"fake ", b"onnx bytes"]
@@ -1083,6 +1110,216 @@ class TestFetchDetectionModel:
 
         assert res.status_code == 200
         assert res.json()["model_path"] == str(tmp_path / "evil.onnx")
+
+    def test_does_not_let_httpx_follow_redirects(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [b"onnx"]))
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert fake.client_kwargs["follow_redirects"] is False
+
+    def test_follows_https_redirect_to_public_host(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        fake = _FakeAsyncClient(
+            routes={
+                "https://example.com/model.onnx": _FakeFetchResponse(
+                    302, [], {"location": "https://cdn.example.org/m/model.onnx"}
+                ),
+                "https://cdn.example.org/m/model.onnx": _FakeFetchResponse(
+                    200, [b"onnx bytes"]
+                ),
+            }
+        )
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 200
+        assert (tmp_path / "model.onnx").read_bytes() == b"onnx bytes"
+
+    def test_resolves_relative_redirect_location(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        fake = _FakeAsyncClient(
+            routes={
+                "https://example.com/a/model.onnx": _FakeFetchResponse(
+                    301, [], {"location": "/b/model.onnx"}
+                ),
+                "https://example.com/b/model.onnx": _FakeFetchResponse(200, [b"onnx"]),
+            }
+        )
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/a/model.onnx"},
+            )
+
+        assert res.status_code == 200
+        assert fake.requested_urls[-1] == "https://example.com/b/model.onnx"
+
+    def test_rejects_redirect_to_plain_http(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        fake = _FakeAsyncClient(
+            routes={
+                "https://example.com/model.onnx": _FakeFetchResponse(
+                    302, [], {"location": "http://example.com/model.onnx"}
+                ),
+            }
+        )
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 400
+        assert fake.requested_urls == ["https://example.com/model.onnx"]
+        assert not (tmp_path / "model.onnx").exists()
+
+    def test_rejects_redirect_to_internal_host(
+        self, client: TestClient, tmp_path: Path, resolve_host: AsyncMock
+    ) -> None:
+        resolve_host.side_effect = lambda host: (
+            ["192.168.1.1"] if host == "router.lan" else [_PUBLIC_IP]
+        )
+        fake = _FakeAsyncClient(
+            routes={
+                "https://example.com/model.onnx": _FakeFetchResponse(
+                    302, [], {"location": "https://router.lan/model.onnx"}
+                ),
+            }
+        )
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 400
+        assert fake.requested_urls == ["https://example.com/model.onnx"]
+
+    @pytest.mark.parametrize(
+        "address", ["127.0.0.1", "10.0.0.7", "169.254.169.254", "::1", "fe80::1%eth0"]
+    )
+    def test_rejects_url_resolving_to_non_public_address(
+        self,
+        client: TestClient,
+        tmp_path: Path,
+        resolve_host: AsyncMock,
+        address: str,
+    ) -> None:
+        resolve_host.return_value = [_PUBLIC_IP, address]
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [b"onnx"]))
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 400
+        assert fake.requested_urls == []
+
+    def test_unresolvable_host_returns_502(
+        self, client: TestClient, tmp_path: Path, resolve_host: AsyncMock
+    ) -> None:
+        resolve_host.side_effect = OSError("no such host")
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [b"onnx"]))
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 502
+
+    def test_redirect_without_location_returns_502(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(302, []))
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 502
+
+    def test_too_many_redirects_returns_502(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        loop_response = _FakeFetchResponse(
+            302, [], {"location": "https://example.com/model.onnx"}
+        )
+        fake = _FakeAsyncClient(response=loop_response)
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 502
+        assert len(fake.requested_urls) == setup_router._MAX_MODEL_FETCH_REDIRECTS + 1
+
+    def test_failed_download_keeps_existing_model_and_leaves_no_temp_file(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        (tmp_path / "model.onnx").write_bytes(b"previous model")
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [b"x" * 20]))
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(setup_router, "_MAX_MODEL_UPLOAD_BYTES", 10),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/model/fetch",
+                json={"url": "https://example.com/model.onnx"},
+            )
+
+        assert res.status_code == 400
+        assert (tmp_path / "model.onnx").read_bytes() == b"previous model"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["model.onnx"]
+
+
+class TestResolveHost:
+    async def test_returns_resolved_addresses(self) -> None:
+        addresses = await setup_router._resolve_host("localhost")
+        assert "127.0.0.1" in addresses or "::1" in addresses
 
 
 class TestDetectionClassesEndpoint:

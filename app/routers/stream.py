@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import numpy as np
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
@@ -77,9 +78,10 @@ async def stream(
     snapshot for this camera, its boxes are drawn on top before encoding —
     that snapshot may lag slightly behind the frame being encoded, since
     the detection worker runs at a lower cadence than capture/encode; this
-    is an accepted approximation. Closes with code 1008 if the stream
-    token is missing/invalid/expired/for a different camera, or if
-    camera_name is not registered. Drawing and encoding both run in a
+    is an accepted approximation. An expired snapshot (stalled or failing
+    detection) is ignored so stale boxes are never drawn. Closes with code
+    1008 if the stream token is missing/invalid/expired/for a different
+    camera, or if camera_name is not registered. Drawing and encoding both run in a
     thread-pool executor to keep the async event loop responsive.
     """
     try:
@@ -108,7 +110,12 @@ async def stream(
 
             if frame is not None and frame.sequence != last_sequence:
                 snapshot = state.detection_results.get(camera_name)
-                detections = snapshot.detections if snapshot is not None else []
+                detections = (
+                    snapshot.detections
+                    if snapshot is not None
+                    and not snapshot.is_expired(time.monotonic())
+                    else []
+                )
                 jpeg = await loop.run_in_executor(
                     None, _draw_and_encode, frame.image, detections
                 )

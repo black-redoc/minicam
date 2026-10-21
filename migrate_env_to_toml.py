@@ -9,6 +9,7 @@ Only stdlib dependencies: pathlib, tomllib, tomli_w.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -80,8 +81,12 @@ def main() -> None:
 
     env = _parse_env(_ENV_PATH)
     doc = _build_toml_doc(env)
-    _TOML_PATH.write_bytes(tomli_w.dumps(doc).encode())
-    _TOML_PATH.chmod(0o600)
+    # Created 0600 up front (O_EXCL: never through an existing file or
+    # symlink) so the camera passwords are never world-readable, not even
+    # between the write and a later chmod.
+    fd = os.open(_TOML_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as toml_file:
+        toml_file.write(tomli_w.dumps(doc).encode())
     print(f"Written: {_TOML_PATH}")
 
 

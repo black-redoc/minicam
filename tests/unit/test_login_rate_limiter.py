@@ -77,3 +77,59 @@ class TestIsAllowed:
         clock.advance(61)
 
         assert await limiter.is_allowed("k") is True
+
+
+class TestMemoryBound:
+    async def test_tracked_keys_never_exceed_max_keys(self) -> None:
+        clock = _FakeClock()
+        limiter = LoginRateLimiter(
+            max_attempts=5, window_seconds=60, clock=clock, max_keys=10
+        )
+
+        for i in range(100):
+            await limiter.is_allowed(f"k{i}")
+
+        assert len(limiter._attempts) <= 10
+
+    async def test_expired_keys_are_dropped_before_live_ones(self) -> None:
+        clock = _FakeClock()
+        limiter = LoginRateLimiter(
+            max_attempts=1, window_seconds=60, clock=clock, max_keys=10
+        )
+        await limiter.is_allowed("victim")
+        clock.advance(30)
+        for i in range(8):
+            await limiter.is_allowed(f"old{i}")
+        clock.advance(31)  # old* still live, but "victim"'s attempt expired
+
+        await limiter.is_allowed("v")
+        await limiter.is_allowed("w")
+
+        assert "victim" not in limiter._attempts
+        assert all(f"old{i}" in limiter._attempts for i in range(8))
+
+    async def test_evicts_least_recently_attempted_key_first(self) -> None:
+        clock = _FakeClock()
+        limiter = LoginRateLimiter(
+            max_attempts=1, window_seconds=60, clock=clock, max_keys=10
+        )
+        for i in range(10):
+            await limiter.is_allowed(f"k{i}")
+        # Re-attempting k0 makes it the most recent, so k1 is now the oldest.
+        assert await limiter.is_allowed("k0") is False
+
+        await limiter.is_allowed("new")
+
+        assert "k1" not in limiter._attempts
+        assert await limiter.is_allowed("k0") is False
+
+    async def test_blocked_key_stays_blocked_while_under_the_cap(self) -> None:
+        clock = _FakeClock()
+        limiter = LoginRateLimiter(
+            max_attempts=1, window_seconds=60, clock=clock, max_keys=10
+        )
+        await limiter.is_allowed("attacker")
+        for i in range(5):
+            await limiter.is_allowed(f"other{i}")
+
+        assert await limiter.is_allowed("attacker") is False

@@ -116,6 +116,43 @@ class TestSaveConfig:
         assert data["detection"]["confidence_threshold"] == 0.6
         assert data["detection"]["inference_fps"] == 4.0
 
+    def test_tightens_permissions_of_existing_world_readable_file(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text("")
+        path.chmod(0o644)
+
+        save_config(AppConfig(cameras=[_make_camera()]), path)
+
+        assert path.stat().st_mode & 0o777 == 0o600
+
+    def test_never_writes_target_in_place(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text("")
+        original_inode = path.stat().st_ino
+
+        save_config(AppConfig(cameras=[_make_camera()]), path)
+
+        assert path.stat().st_ino != original_inode
+
+    def test_failed_write_keeps_previous_config_and_leaves_no_temp_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = tmp_path / "config.toml"
+        save_config(AppConfig(cameras=[_make_camera("before")]), path)
+        previous = path.read_bytes()
+
+        def failing_replace(src: str, dst: Path) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(config_writer_module.os, "replace", failing_replace)
+        with pytest.raises(OSError, match="disk full"):
+            save_config(AppConfig(cameras=[_make_camera("after")]), path)
+
+        assert path.read_bytes() == previous
+        assert [p.name for p in tmp_path.iterdir()] == ["config.toml"]
+
 
 class TestDetectionRoundTrip:
     def test_round_trips_detection_config(self, tmp_path: Path) -> None:
