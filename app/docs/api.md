@@ -11,6 +11,8 @@ Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unle
 | `GET` | `/admin` | admin | Admin page (user + permission management) |
 | `GET` | `/health` | none | Health summary (counts only) |
 | `GET` | `/api/health/cameras` | admin | Per-camera health status |
+| `GET` | `/api/detection/catalog` | admin | minicam-models catalog with local install state |
+| `POST` | `/api/detection/catalog/install` | admin | Install (and activate) a catalog model by name |
 | `POST` | `/api/auth/login` | none | Log in, set session cookie |
 | `GET` | `/api/auth/setup` | none | Whether first-run setup is pending |
 | `POST` | `/api/auth/setup` | none (LAN, only while no user exists) | Create the first admin and sign in |
@@ -63,6 +65,37 @@ Per-camera runtime status, sorted by name. Requires an **administrator session**
 ```
 
 `last_frame_age_seconds` is the time since the capture thread last delivered a frame (`null` if it never has). A large value on a camera reported as `connected` means the stream is stalled.
+
+---
+
+## `GET /api/detection/catalog`
+
+Lists the assets of the configured minicam-models release (`MINICAM_MODEL_CATALOG_URL`). Requires an **administrator session**. `installed` means a file with the expected size is in `app/data/models/`. `active` means it is the configured ONNX model.
+
+**Response `200`:**
+```json
+{
+  "catalog_url": "https://github.com/black-redoc/minicam-models/releases/latest/download/manifest.json",
+  "release": "v0.1.0",
+  "assets": [
+    {"name": "yolo11n-int8.onnx", "model": "yolo11n", "family": "YOLO11", "precision": "int8",
+     "profile": "Raspberry Pi 5 (CPU)", "bytes": 4590317, "sha256": "1ca298c7…", "url": "https://…",
+     "installed": true, "active": true}
+  ]
+}
+```
+
+**Response `502`:** the manifest could not be fetched, or it is invalid or incompatible with this minicam.
+
+## `POST /api/detection/catalog/install`
+
+Installs a catalog asset by name, verifying its sha256 against a fresh copy of the manifest, and by default activates it as the ONNX model. Requires an **administrator session**.
+
+**Request body:** `{"name": "yolo11n-int8.onnx", "activate": true}`. `activate` is optional and defaults to `true`.
+
+**Response `200`:** `{"model_path": "/…/app/data/models/yolo11n-int8.onnx", "sha256": "1ca298c7…", "active": true}`
+
+**Response `404`:** no asset with that name in the catalog. **Response `502`:** fetch failure or checksum mismatch.
 
 ---
 

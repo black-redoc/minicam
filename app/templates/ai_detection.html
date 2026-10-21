@@ -20,6 +20,26 @@
 
 <main class="p-4 md:p-6 max-w-3xl mx-auto w-full flex flex-col gap-6">
 
+    <!-- Model catalog (minicam-models releases) -->
+    <section class="card flex flex-col gap-4" id="model-catalog">
+        <div class="flex items-center justify-between gap-3">
+            <h2 class="text-xs text-slate-500 uppercase tracking-widest font-semibold">
+                Model catalog
+            </h2>
+            <span id="model-catalog-release" class="text-xs text-slate-500"></span>
+        </div>
+        <p class="text-xs text-slate-500">
+            Ready-to-use YOLO models from
+            <a href="https://github.com/black-redoc/minicam-models" target="_blank" rel="noopener noreferrer"
+               class="text-sky-400 hover:text-sky-300">minicam-models</a>.
+            Raspberry Pi 5: pick an <span class="font-mono">n</span> model (<span class="font-mono">int8</span> is fastest).
+            x86 PC: an <span class="font-mono">s</span> model. Installing verifies the file's checksum and activates it.
+        </p>
+        <p id="model-catalog-status" class="text-xs text-slate-400">Loading catalog…</p>
+        <ul id="model-catalog-list" class="flex flex-col divide-y divide-slate-800"></ul>
+        <p id="model-catalog-error" class="hidden text-xs text-red-400" role="alert"></p>
+    </section>
+
     <!-- AI Detection -->
     <section class="card flex flex-col gap-4">
         <h2 class="text-xs text-slate-500 uppercase tracking-widest font-semibold">
@@ -129,4 +149,5 @@
 {% block scripts %}
 <script src="{{ url_for('static', path='js/auth.js') }}"></script>
 <script src="{{ url_for('static', path='js/ai-detection.js') }}"></script>
+<script src="{{ url_for('static', path='js/model-catalog.js') }}"></script>
 {% endblock %}
