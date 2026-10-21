@@ -9,7 +9,8 @@ Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unle
 | `GET` | `/` | session (redirects to `/login` if none) | Dashboard HTML, filtered to viewable cameras |
 | `GET` | `/login` | none | Login page |
 | `GET` | `/admin` | admin | Admin page (user + permission management) |
-| `GET` | `/health` | none | App health status |
+| `GET` | `/health` | none | Health summary (counts only) |
+| `GET` | `/api/health/cameras` | admin | Per-camera health status |
 | `POST` | `/api/auth/login` | none | Log in, set session cookie |
 | `GET` | `/api/auth/setup` | none | Whether first-run setup is pending |
 | `POST` | `/api/auth/setup` | none (LAN, only while no user exists) | Create the first admin and sign in |
@@ -38,16 +39,30 @@ See [Authentication & Authorization](/doc/auth) for the full `/api/auth/*` refer
 
 ## `GET /health`
 
-Returns current application status.
+Public, unauthenticated summary for uptime monitors. It returns counts only: camera names and config details stay behind authorization. It always answers `200`. A camera being down shows up as `"degraded"`, which is not a reason for a supervisor to restart the app.
 
 **Response `200`:**
 ```json
 {
-  "status": "ok",
+  "status": "degraded",
   "cameras": 2,
-  "debug": false
+  "cameras_connected": 1
 }
 ```
+
+## `GET /api/health/cameras`
+
+Per-camera runtime status, sorted by name. Requires an **administrator session**.
+
+**Response `200`:**
+```json
+[
+  {"name": "garage", "connected": true, "last_frame_age_seconds": 0.04, "detection_active": true},
+  {"name": "porch", "connected": false, "last_frame_age_seconds": 812.3, "detection_active": false}
+]
+```
+
+`last_frame_age_seconds` is the time since the capture thread last delivered a frame (`null` if it never has). A large value on a camera reported as `connected` means the stream is stalled.
 
 ---
 

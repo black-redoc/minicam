@@ -14,6 +14,7 @@ from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.routers import auth as auth_router
 from app.routers import dashboard
 from app.routers import docs as docs_router
+from app.routers import health as health_router
 from app.routers import ptz as ptz_router
 from app.routers import setup as setup_router
 from app.routers import stream as stream_router
@@ -112,14 +113,4 @@ app.include_router(stream_router.router)
 app.include_router(ptz_router.router)
 app.include_router(setup_router.router)
 app.include_router(docs_router.router)
-
-
-@app.get("/health")
-def health() -> dict[str, str | int | bool]:
-    """JSON health status."""
-    config = get_config()
-    return {
-        "status": "ok",
-        "cameras": len(config.cameras),
-        "debug": config.debug,
-    }
+app.include_router(health_router.router)
