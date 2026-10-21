@@ -5,6 +5,22 @@ authorization, and a hardened Cloudflare Tunnel / Access path for WAN access.
 
 ## Quick Start
 
+### Create the JWT secret
+
+The app refuses to start without `MINICAM_JWT_SECRET`. Create `.env` with a
+fresh random secret and export it into your shell (`fastapi dev` does not read
+`.env` on its own):
+
+```bash
+cp .env.example .env && chmod 600 .env
+secret=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+sed -i.bak "s/^MINICAM_JWT_SECRET=.*/MINICAM_JWT_SECRET=$secret/" .env && rm .env.bak
+set -a; . ./.env; set +a
+```
+
+See [Initial Setup](app/docs/configuration.md#initial-setup-creating-minicam_jwt_secret)
+for details and how to rotate it.
+
 ### Start the development server
 
 ```bash
@@ -40,9 +56,10 @@ npm ci --ignore-scripts && npm run lint && npm run typecheck
 
 ## Deployment
 
-Copy `.env.example` to `.env` and fill in the real values (see the comments
-in that file, or [Configuration](app/docs/configuration.md) for the full
-reference), then enable the app as a systemd service:
+Copy `.env.example` to `.env`, generate `MINICAM_JWT_SECRET` as described in
+[Initial Setup](app/docs/configuration.md#initial-setup-creating-minicam_jwt_secret),
+and fill in the remaining values (see the comments in that file, or
+[Configuration](app/docs/configuration.md) for the full reference), then enable the app as a systemd service:
 
 ```bash
 sudo cp deploy/minicam.service /etc/systemd/system/minicam.service

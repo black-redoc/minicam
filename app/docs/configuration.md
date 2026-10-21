@@ -84,13 +84,45 @@ Unlike camera config, the security layer (sessions, stream tokens, WAN access) i
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|--------------|
-| `MINICAM_JWT_SECRET` | **yes** | — | Secret used to sign session and stream-token JWTs. The app refuses to start without it. |
+| `MINICAM_JWT_SECRET` | **yes** | — | Secret used to sign session and stream-token JWTs. The app refuses to start without it. See [Initial Setup](#initial-setup-creating-minicam_jwt_secret). |
 | `MINICAM_SESSION_TTL_SECONDS` | no | `86400` (24h) | How long a login session stays valid before it must be renewed via a new login. |
 | `MINICAM_STREAM_TOKEN_TTL_SECONDS` | no | `30` | Lifetime of the short-lived token that authorizes one WebSocket handshake. See [Video Streaming](/doc/stream). |
 | `MINICAM_DB_PATH` | no | `app/minicam.db` | Path to the SQLite database storing users, sessions, camera permissions, and WAN access flags. |
 | `MINICAM_TRUSTED_PROXIES` | no | `""` (empty) | Comma-separated list of proxy IPs. Requests arriving through one of these are always classified as WAN — see [Authentication & Authorization](/doc/auth). |
 | `MINICAM_CF_ACCESS_TEAM_DOMAIN` | required for WAN | — | Cloudflare Access team domain, used to fetch the JWKS that verifies the `Cf-Access-Jwt-Assertion` header on WAN requests. |
 | `MINICAM_CF_ACCESS_AUD` | required for WAN | — | Audience (AUD) tag of the Cloudflare Access application protecting this tunnel hostname. |
+
+## Initial Setup: Creating `MINICAM_JWT_SECRET`
+
+Every new install needs its own `MINICAM_JWT_SECRET` before the first start — the app refuses to boot without it (`RuntimeError: MINICAM_JWT_SECRET is not set`). It signs session and stream-token JWTs (HS256), so anyone who knows it can forge a login: generate a fresh random value per device and never reuse the placeholder from `.env.example`.
+
+1. Create `.env` from the template and lock down its permissions (it is already in `.gitignore` — never commit it):
+
+   ```bash
+   cp .env.example .env
+   chmod 600 .env
+   ```
+
+2. Generate a 64-character hex secret (32 random bytes) and write it into `.env`:
+
+   ```bash
+   secret=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+   sed -i.bak "s/^MINICAM_JWT_SECRET=.*/MINICAM_JWT_SECRET=$secret/" .env && rm .env.bak
+   grep -c '^MINICAM_JWT_SECRET=[0-9a-f]\{64\}$' .env   # prints 1
+   ```
+
+   `openssl rand -hex 32` produces an equivalent value if Python isn't handy.
+
+3. Make sure the process actually receives it:
+   - **systemd (production):** `deploy/minicam.service` loads `.env` through `EnvironmentFile=`, so `sudo systemctl restart minicam.service` is enough.
+   - **Development:** `uv run fastapi dev` does **not** read `.env` by itself. Export it into your shell first:
+
+     ```bash
+     set -a; . ./.env; set +a
+     uv run fastapi dev
+     ```
+
+**Rotating the secret.** Replace the value in `.env` and restart the app. Every existing session cookie and stream token stops verifying immediately, so all users are logged out and must sign in again — which is also the right move if the secret ever leaks.
 
 ## Bootstrapping the First Admin
 
