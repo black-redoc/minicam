@@ -51,8 +51,41 @@ npm ci --ignore-scripts && npm run lint && npm run typecheck
 
 ## Project Structure
 
-- `main.py` - Your FastAPI application
-- `pyproject.toml` - Project dependencies
+```
+main.py                 App entry point: lifespan starts each camera's RTSP
+                        capture, PTZ service and detection worker; mounts routers
+app/
+  routers/              HTTP/WebSocket endpoints: auth, dashboard, stream, ptz,
+                        setup (cameras, detection), docs
+  services/             Camera capture/decoding, JPEG encoding, ONVIF PTZ and
+                        discovery, auth, authorization, LAN/WAN classification,
+                        Cloudflare Access verification, stream tokens
+    detection/          Pluggable object detection (ONNX backend, NMS, worker)
+  buffers/              Per-camera frame buffer shared by capture and viewers
+  models/               Pydantic and domain models (config, auth, frames)
+  repositories/         SQLite access: users, sessions, permissions, wan_access
+  db/                   Connection setup and SQL migrations
+  middleware/           Security headers
+  cli/                  `create_user` (bootstrap the first admin)
+  settings.py           config.toml loader (cameras, detection)
+  security_settings.py  Environment-based security config (.env)
+  dependencies.py       FastAPI dependency wiring for the security layer
+  state.py              Process-wide singletons (cameras, buffers, workers)
+  templates/            Jinja2 pages (dashboard, login, admin, AI detection, docs)
+  static/               CSS, images and plain JS (type-checked via tsconfig.json)
+  docs/                 User docs, served in-app at /doc/<page>
+deploy/minicam.service  systemd unit for the device
+tests/                  unit, integration, e2e and benchmarks
+config.toml.example     Camera config template (real config.toml is gitignored)
+.env.example            Security env vars template (real .env is gitignored)
+spec.md                 Product and architecture spec
+migrate_env_to_toml.py  One-off migration from the old .env camera config
+```
+
+At runtime the app also creates the SQLite database (`MINICAM_DB_PATH`),
+writes `config.toml` whenever cameras or detection settings are edited from the
+UI (it starts with defaults if the file is missing), and stores uploaded or
+fetched detection models in `app/data/models/`.
 
 ## Deployment
 
