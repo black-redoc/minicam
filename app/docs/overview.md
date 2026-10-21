@@ -49,7 +49,7 @@ Holds only the latest frame. The capture thread replaces it with a single attrib
 One per camera buffer. The first viewer to need a frame starts its encode in the default executor; every other viewer of that camera awaits the same result. Encoding CPU scales with the camera's frame rate, not with the number of viewers.
 
 ### Security layer (`app/services/auth.py`, `authorization.py`, `wan_access.py`, `stream_tokens.py`)
-Backed by a SQLite database (`app/db/migrations/0001_initial.sql`) with `users`, `sessions`, `camera_permissions`, and `wan_access` tables. See [Authentication & Authorization](/doc/auth) for details on sessions, per-camera permissions, and the WAN access gate.
+Backed by a SQLite database (`app/db/migrations/0001_initial.sql`) with `users`, `sessions`, `camera_permissions`, and `wan_access` tables. Schema changes are numbered SQL files in `app/db/migrations/` (`NNNN_<name>.sql`, one statement per line ending in `;`). On startup (and from the `create_user` CLI) each file that is not yet recorded in the `schema_migrations` table runs once, in its own transaction, so a new migration can use plain `ALTER TABLE` and never runs twice. See [Authentication & Authorization](/doc/auth) for details on sessions, per-camera permissions, and the WAN access gate.
 
 ### Routers
 | Router | Prefix | Responsibility |
