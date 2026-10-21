@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
+import os
+import socket
+import tempfile
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
@@ -41,6 +46,8 @@ _ONNX_BACKEND_NAME = "onnx"
 _MODEL_UPLOAD_ALLOWED_SUFFIX = ".onnx"
 _MAX_MODEL_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
 _MODEL_UPLOAD_CHUNK_BYTES = 1024 * 1024  # 1 MiB
+_MAX_MODEL_FETCH_REDIRECTS = 5
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MODELS_DIR = Path(__file__).resolve().parent.parent / "data" / "models"
 
 
@@ -298,11 +305,33 @@ def _safe_model_name(filename: str) -> str:
     return safe_name
 
 
-def _write_model_bytes(safe_name: str, data: bytes) -> Path:
-    """Write validated model bytes to _MODELS_DIR and return the destination."""
+async def _write_model_chunks(safe_name: str, chunks: AsyncIterator[bytes]) -> Path:
+    """Stream chunks to _MODELS_DIR/safe_name, enforcing the size cap.
+
+    Chunks go to a temporary file in the same directory (never held in RAM,
+    which matters on a Raspberry Pi with a 200 MB cap) and are only moved
+    into place with an atomic os.replace() once the whole stream passes
+    validation, so a size-cap breach or network failure never leaves a
+    partial file behind or clobbers an existing model.
+    """
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)
     destination = _MODELS_DIR / safe_name
-    destination.write_bytes(data)
+    fd, tmp_name = tempfile.mkstemp(dir=_MODELS_DIR, suffix=".part")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as tmp_file:
+            written = 0
+            async for chunk in chunks:
+                written += len(chunk)
+                if written > _MAX_MODEL_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=400, detail="Model file is too large"
+                    )
+                await asyncio.to_thread(tmp_file.write, chunk)
+        os.replace(tmp_path, destination)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return destination
 
 
@@ -312,33 +341,77 @@ def _require_https_url(url: str) -> None:
         raise HTTPException(status_code=400, detail="Only https:// URLs are accepted")
 
 
-async def _stream_model_url(url: str, safe_name: str) -> Path:
-    """Stream a remote .onnx file to _MODELS_DIR, enforcing the size cap.
+async def _resolve_host(host: str) -> list[str]:
+    """Return every IP address host resolves to (mockable seam for tests)."""
+    loop = asyncio.get_running_loop()
+    infos = await loop.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    return [str(info[4][0]) for info in infos]
 
-    Bytes are buffered in memory and only written to disk once the full
-    download passes validation, so a size-cap breach or network failure
-    never leaves a partial file behind.
+
+async def _require_public_host(url: str) -> None:
+    """Reject URLs whose host is, or resolves to, a non-public address.
+
+    Blocks the fetch endpoint from being pointed at the LAN, loopback or
+    link-local services (cameras, router, cloud metadata). A DNS answer
+    that changes between this check and the actual connect is not covered;
+    the endpoint is admin-only, so this is defense in depth, not the sole
+    control.
+    """
+    host = httpx.URL(url).host
+    if not host:
+        raise HTTPException(status_code=400, detail="URL has no host")
+    try:
+        addresses = await _resolve_host(host)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Cannot resolve host: {host}"
+        ) from exc
+    # Strip any IPv6 zone id ("fe80::1%eth0"), which ip_address() rejects.
+    if not addresses or not all(
+        ipaddress.ip_address(addr.split("%", 1)[0]).is_global for addr in addresses
+    ):
+        raise HTTPException(status_code=400, detail="URL must point to a public host")
+
+
+async def _validate_fetch_url(url: str) -> None:
+    _require_https_url(url)
+    await _require_public_host(url)
+
+
+async def _stream_model_url(url: str, safe_name: str) -> Path:
+    """Download a remote .onnx file to _MODELS_DIR, enforcing the size cap.
+
+    Redirects are followed manually (follow_redirects=False) so every hop is
+    re-validated: an https:// URL must not be able to bounce the download to
+    plain http:// or to an internal address.
     """
     timeout = httpx.Timeout(10.0, read=60.0)
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-            async with client.stream("GET", url) as response:
-                if response.status_code != 200:
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"Fetch failed with status {response.status_code}",
-                    )
-                buffer = bytearray()
-                async for chunk in response.aiter_bytes(_MODEL_UPLOAD_CHUNK_BYTES):
-                    buffer.extend(chunk)
-                    if len(buffer) > _MAX_MODEL_UPLOAD_BYTES:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=timeout) as client:
+            for _ in range(_MAX_MODEL_FETCH_REDIRECTS + 1):
+                await _validate_fetch_url(url)
+                async with client.stream("GET", url) as response:
+                    if response.status_code in _REDIRECT_STATUSES:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise HTTPException(
+                                status_code=502,
+                                detail="Redirect without a Location header",
+                            )
+                        url = str(httpx.URL(url).join(location))
+                        continue
+                    if response.status_code != 200:
                         raise HTTPException(
-                            status_code=400, detail="Model file is too large"
+                            status_code=502,
+                            detail=f"Fetch failed with status {response.status_code}",
                         )
+                    return await _write_model_chunks(
+                        safe_name, response.aiter_bytes(_MODEL_UPLOAD_CHUNK_BYTES)
+                    )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Fetch failed: {exc}") from exc
 
-    return _write_model_bytes(safe_name, bytes(buffer))
+    raise HTTPException(status_code=502, detail="Too many redirects")
 
 
 @router.post("/api/detection/model")
@@ -351,13 +424,11 @@ async def upload_detection_model(file: UploadFile = File(...)) -> dict[str, str]
     # Read in bounded chunks instead of a single file.read(): Content-Length
     # is client-supplied and cannot be trusted, so the size cap must be
     # enforced against bytes actually received.
-    buffer = bytearray()
-    while chunk := await file.read(_MODEL_UPLOAD_CHUNK_BYTES):
-        buffer.extend(chunk)
-        if len(buffer) > _MAX_MODEL_UPLOAD_BYTES:
-            raise HTTPException(status_code=400, detail="Model file is too large")
+    async def upload_chunks() -> AsyncIterator[bytes]:
+        while chunk := await file.read(_MODEL_UPLOAD_CHUNK_BYTES):
+            yield chunk
 
-    destination = _write_model_bytes(safe_name, bytes(buffer))
+    destination = await _write_model_chunks(safe_name, upload_chunks())
     return {"model_path": str(destination)}
 
 

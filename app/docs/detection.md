@@ -41,6 +41,8 @@ To install a release asset, either:
 - Paste the asset's GitHub Release URL into the dashboard's AI Detection page ("Fetch from URL"), which calls `POST /api/detection/model/fetch` to download it server-side, or
 - Upload a `.onnx` file manually via the same page ("Upload model" / `POST /api/detection/model`).
 
+The URL fetch only accepts `https://` URLs whose host resolves to a public address. Redirects (GitHub Release assets redirect to a CDN) are followed manually, up to 5 hops, and every hop is re-checked against the same rules. Downloads and uploads are streamed to a temporary file and moved into place only once complete, so a failed or oversized transfer never replaces an existing model.
+
 Either way, the endpoint returns the file's path on disk — copy it into `model_path` and save to activate it (or set `MINICAM_DETECTION_MODEL_PATH` directly and skip the dashboard).
 
 For a one-off or custom export (a different model size, a different `ultralytics` version) that doesn't go through the pipeline, the same command it runs can be used directly:
