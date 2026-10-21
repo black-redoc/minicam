@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "release": "v0.1.0",
+  "toolchain": {
+    "ultralytics": "8.4.183",
+    "torch": "2.14.1+cpu",
+    "onnx": "1.23.2",
+    "onnxslim": "0.1.98",
+    "onnxruntime": "1.27.0"
+  },
+  "contract": {
+    "input": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        3,
+        640,
+        640
+      ]
+    },
+    "output": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        84,
+        8400
+      ]
+    },
+    "classes": "coco80",
+    "nms": false,
+    "minicam_onnxruntime": "1.27.0"
+  },
+  "assets": [
+    {
+      "name": "yolov8n-fp32.onnx",
+      "model": "yolov8n",
+      "family": "YOLOv8",
+      "precision": "fp32",
+      "profile": "Raspberry Pi 5 (CPU)",
+      "bytes": 12851210,
+      "sha256": "6b8effcb10da8631f93e7b421470a57dc0cdfcb0dd807ac951cb819ccc58fc19",
+      "source_url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt",
+      "source_sha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+      "int8_agreement": null,
+      "url": "https://github.com/black-redoc/minicam-models/releases/download/v0.1.0/yolov8n-fp32.onnx"
+    },
+    {
+      "name": "yolov8n-int8.onnx",
+      "model": "yolov8n",
+      "family": "YOLOv8",
+      "precision": "int8",
+      "profile": "Raspberry Pi 5 (CPU)",
+      "bytes": 6298277,
+      "sha256": "3ed0a3e512a29eecabc70e5740b2f8ca50605f0b9a8f6021d263f2789af1c7d0",
+      "source_url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt",
+      "source_sha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+      "int8_agreement": 0.8613138686131386,
+      "url": "https://github.com/black-redoc/minicam-models/releases/download/v0.1.0/yolov8n-int8.onnx"
+    },
+    {
+      "name": "yolov8s-fp32.onnx",
+      "model": "yolov8s",
+      "family": "YOLOv8",
+      "precision": "fp32",
+      "profile": "x86 PC (CPU)",
+      "bytes": 44869998,
+      "sha256": "38fad9566b30ddc0fe99cc3fda1f1e82a1c3ff3efe1173e263c6e3c23a444614",
+      "source_url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s.pt",
+      "source_sha256": "1f47a78bf100391c2a140b7ac73a1caae18c32779be7d310658112f7ac9aa78a",
+      "int8_agreement": null,
+      "url": "https://github.com/black-redoc/minicam-models/releases/download/v0.1.0/yolov8s-fp32.onnx"
+    },
+    {
+      "name": "yolov8s-int8.onnx",
+      "model": "yolov8s",
+      "family": "YOLOv8",
+      "precision": "int8",
+      "profile": "x86 PC (CPU)",
+      "bytes": 18121322,
+      "sha256": "e1c70259aca3cb0a48286baa0757f8e566b3a8e475a88ba7ba5091697e5d9de3",
+      "source_url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s.pt",
+      "source_sha256": "1f47a78bf100391c2a140b7ac73a1caae18c32779be7d310658112f7ac9aa78a",
+      "int8_agreement": 0.8520710059171598,
+      "url": "https://github.com/black-redoc/minicam-models/releases/download/v0.1.0/yolov8s-int8.onnx"
+    },
+    {
+      "name": "yolo11n-fp32.onnx",
+      "model": "yolo11n",
+      "family": "YOLO11",
+      "precision": "fp32",
+      "profile": "Raspberry Pi 5 (CPU)",
+      "bytes": 10741502,
+      "sha256": "ef3b93540bd491e925d7dffc57d75c89b86e7e7d63c162a8149662963566aa9b",
+      "source_url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
+      "source_sha256": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1",
+      "int8_agreement": null,
+      "url": "https://github.com/black-redoc/minicam-models/releases/download/v0.1.0/yolo11n-fp32.onnx"
+    },
+    {
+      "name": "yolo11n-int8.onnx",
+      "model": "yolo11n",
+      "family": "YOLO11",
+      "precision": "int8",
+      "profile": "Raspberry Pi 5 (CPU)",
+      "bytes": 4590317,
+      "sha256": "1ca298c7507b8402eea5d593746f93b81b30c66fa76966b1623d503b8a64b3f9",
+      "source_url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
+      "source_sha256": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1",
+      "int8_agreement": 0.9078947368421053,
+      "url": "https://github.com/black-redoc/minicam-models/releases/download/v0.1.0/yolo11n-int8.onnx"
+    },
+    {
+      "name": "yolo11s-fp32.onnx",
+      "model": "yolo11s",
+      "family": "YOLO11",
+      "precision": "fp32",
+      "profile": "x86 PC (CPU)",
+      "bytes": 38051888,
+      "sha256": "e804e0517e8f78149c47e6fae1fc28b63f0942f6f89071ca2780f012d462a4ee",
+      "source_url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s.pt",
+      "source_sha256": "85a76fe86dd8afe384648546b56a7a78580c7cb7b404fc595f97969322d502d5",
+      "int8_agreement": null,
+      "url": "https://github.com/black-redoc/minicam-models/releases/download/v0.1.0/yolo11s-fp32.onnx"
+    },
+    {
+      "name": "yolo11s-int8.onnx",
+      "model": "yolo11s",
+      "family": "YOLO11",
+      "precision": "int8",
+      "profile": "x86 PC (CPU)",
+      "bytes": 12672528,
+      "sha256": "3fea702a122c30fbd2c9f37c2ad840e529fbfa62a79323a2fb65a0de8e14a83a",
+      "source_url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s.pt",
+      "source_sha256": "85a76fe86dd8afe384648546b56a7a78580c7cb7b404fc595f97969322d502d5",
+      "int8_agreement": 0.8662420382165605,
+      "url": "https://github.com/black-redoc/minicam-models/releases/download/v0.1.0/yolo11s-int8.onnx"
+    }
+  ]
+}

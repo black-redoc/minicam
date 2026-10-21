@@ -6,7 +6,7 @@ import pytest
 from av.codec.context import Flags
 
 from app.buffers.frame_buffer import FrameBuffer
-from app.services.camera import RTSPCamera, redact_url
+from app.services.camera import RTSPCamera, reconnect_delay, redact_url
 from tests.fixtures.camera import make_frame, make_mock_av_frame
 
 
@@ -327,3 +327,90 @@ class TestCredentialsNeverLogged:
 
         assert "RTSP stream opened" in caplog.text
         assert "s3cret" not in caplog.text
+
+
+class TestReconnectDelay:
+    @pytest.mark.parametrize(
+        ("attempt", "expected"), [(0, 2.0), (1, 4.0), (2, 8.0), (4, 32.0)]
+    )
+    def test_doubles_per_attempt_without_jitter(
+        self, attempt: int, expected: float
+    ) -> None:
+        assert reconnect_delay(attempt, 0.5) == pytest.approx(expected)
+
+    def test_is_capped_at_sixty_seconds(self) -> None:
+        assert reconnect_delay(5, 0.5) == pytest.approx(60.0)
+        assert reconnect_delay(10_000, 0.5) == pytest.approx(60.0)
+
+    def test_jitter_stays_within_twenty_percent(self) -> None:
+        assert reconnect_delay(0, 0.0) == pytest.approx(1.6)
+        assert reconnect_delay(0, 0.999999) == pytest.approx(2.4, rel=1e-5)
+
+
+class TestReconnectLoop:
+    def _run_loop(self, cam: RTSPCamera, outcomes: list[bool]) -> list[float]:
+        """Run _capture_loop over scripted connections; True = got a frame.
+
+        Returns the delays the loop waited between attempts.
+        """
+        remaining = list(outcomes)
+        delays: list[float] = []
+
+        def fake_capture() -> None:
+            got_frame = remaining.pop(0)
+            if not remaining:
+                cam._running = False
+            cam._got_frame = got_frame
+            raise ConnectionError("down")
+
+        def fake_wait(timeout: float) -> bool:
+            delays.append(timeout)
+            return False
+
+        cam._running = True
+        with (
+            patch.object(cam, "_capture_stream", side_effect=fake_capture),
+            patch.object(cam._stop_event, "wait", side_effect=fake_wait),
+            patch("app.services.camera.random.random", return_value=0.5),
+        ):
+            cam._capture_loop()
+        return delays
+
+    def test_backs_off_exponentially_on_consecutive_failures(self) -> None:
+        cam, _ = _make_camera()
+        delays = self._run_loop(cam, [False, False, False, False])
+        assert delays == pytest.approx([2.0, 4.0, 8.0])
+
+    def test_backoff_resets_after_a_connection_that_delivered_frames(self) -> None:
+        cam, _ = _make_camera()
+        delays = self._run_loop(cam, [False, False, True, False, False])
+        assert delays == pytest.approx([2.0, 4.0, 2.0, 4.0])
+
+    def test_stop_interrupts_a_backoff_wait_immediately(self) -> None:
+        cam, _ = _make_camera()
+        with (
+            patch("app.services.camera.av.open", side_effect=ConnectionError("x")),
+            patch("app.services.camera.reconnect_delay", return_value=30.0),
+        ):
+            cam.start()
+            time.sleep(0.05)  # let the thread fail once and start waiting
+            started = time.monotonic()
+            cam.stop()
+            elapsed = time.monotonic() - started
+
+        assert elapsed < 1.0
+        assert cam._thread is None
+
+
+class TestThreadName:
+    def test_capture_thread_is_named_after_the_camera(self) -> None:
+        buf = FrameBuffer()
+        cam = RTSPCamera(rtsp_url="rtsp://fake/stream", buffer=buf, name="porch")
+        with (
+            patch("app.services.camera.av.open", side_effect=ConnectionError("x")),
+            patch("app.services.camera.reconnect_delay", return_value=30.0),
+        ):
+            cam.start()
+            assert cam._thread is not None
+            assert cam._thread.name == "rtsp:porch"
+            cam.stop()

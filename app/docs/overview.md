@@ -37,7 +37,7 @@ Every request that touches a camera (viewing it on the dashboard, opening its We
 ## Main Components
 
 ### RTSPCamera (`app/services/camera.py`)
-Reads an RTSP stream using `PyAV`, decodes frames to raw RGB24 numpy arrays (`app/services/decoder.py`), and writes them into a `FrameBuffer`. Runs on a background daemon thread. JPEG encoding is *not* done here — it happens on demand, once per frame per camera, shared by all of that camera's viewers (see [Video Streaming](/doc/stream)).
+Reads an RTSP stream using `PyAV`, decodes frames to raw RGB24 numpy arrays (`app/services/decoder.py`), and writes them into a `FrameBuffer`. Runs on a background daemon thread named `rtsp:<camera name>`. When the stream drops it reconnects with exponential backoff (2 s, 4 s, 8 s … capped at 60 s, ±20 % jitter), and the delay resets once a connection delivers a frame. JPEG encoding is *not* done here — it happens on demand, once per frame per camera, shared by all of that camera's viewers (see [Video Streaming](/doc/stream)).
 
 ### PTZService (`app/services/ptz.py`)
 Wraps the `onvif-zeep` library. Connects lazily on first PTZ command. Sends `ContinuousMove` SOAP requests (speed 0.5). Supports `up`, `down`, `left`, `right`, and `stop`.
@@ -49,7 +49,7 @@ Holds only the latest frame. The capture thread replaces it with a single attrib
 One per camera buffer. The first viewer to need a frame starts its encode in the default executor; every other viewer of that camera awaits the same result. Encoding CPU scales with the camera's frame rate, not with the number of viewers.
 
 ### Security layer (`app/services/auth.py`, `authorization.py`, `wan_access.py`, `stream_tokens.py`)
-Backed by a SQLite database (`app/db/migrations/0001_initial.sql`) with `users`, `sessions`, `camera_permissions`, and `wan_access` tables. See [Authentication & Authorization](/doc/auth) for details on sessions, per-camera permissions, and the WAN access gate.
+Backed by a SQLite database (`app/db/migrations/0001_initial.sql`) with `users`, `sessions`, `camera_permissions`, and `wan_access` tables. Schema changes are numbered SQL files in `app/db/migrations/` (`NNNN_<name>.sql`, one statement per line ending in `;`). On startup (and from the `create_user` CLI) each file that is not yet recorded in the `schema_migrations` table runs once, in its own transaction, so a new migration can use plain `ALTER TABLE` and never runs twice. See [Authentication & Authorization](/doc/auth) for details on sessions, per-camera permissions, and the WAN access gate.
 
 ### Routers
 | Router | Prefix | Responsibility |

@@ -91,6 +91,7 @@ Unlike camera config, the security layer (sessions, stream tokens, WAN access) i
 | `MINICAM_TRUSTED_PROXIES` | no | `""` (empty) | Comma-separated list of proxy IPs. Requests arriving through one of these are always classified as WAN — see [Authentication & Authorization](/doc/auth). |
 | `MINICAM_CF_ACCESS_TEAM_DOMAIN` | required for WAN | — | Cloudflare Access team domain, used to fetch the JWKS that verifies the `Cf-Access-Jwt-Assertion` header on WAN requests. |
 | `MINICAM_CF_ACCESS_AUD` | required for WAN | — | Audience (AUD) tag of the Cloudflare Access application protecting this tunnel hostname. |
+| `MINICAM_MODEL_CATALOG_URL` | no | latest [minicam-models](https://github.com/black-redoc/minicam-models) release `manifest.json` | Manifest the AI Detection model catalog lists and installs from. Point it at a tagged release to pin model versions. See [Object Detection](/doc/detection). |
 
 ## Initial Setup: Creating `MINICAM_JWT_SECRET`
 

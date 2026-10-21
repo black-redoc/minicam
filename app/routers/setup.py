@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
+import json
 import logging
 import os
 import socket
 import tempfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import httpx
@@ -20,9 +22,14 @@ from app.models.config import (
     CameraConfig,
     CameraConfigRequest,
     CameraConfigResponse,
+    CatalogAssetStatus,
+    CatalogInstallRequest,
+    CatalogInstallResponse,
     DetectionClassesResponse,
     DetectionConfig,
     DiscoveredCamera,
+    ModelCatalog,
+    ModelCatalogResponse,
     ModelFetchRequest,
 )
 from app.services.camera import RTSPCamera
@@ -35,6 +42,11 @@ from app.services.config_writer import (
 from app.services.detection.factory import get_detection_backend
 from app.services.detection.worker import DetectionWorker
 from app.services.discovery import discover_onvif_cameras
+from app.services.model_catalog import (
+    InvalidManifestError,
+    catalog_url,
+    parse_manifest,
+)
 from app.services.ptz import PTZConfig, PTZService
 from app.settings import get_config
 
@@ -48,6 +60,7 @@ _MAX_MODEL_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
 _MODEL_UPLOAD_CHUNK_BYTES = 1024 * 1024  # 1 MiB
 _MAX_MODEL_FETCH_REDIRECTS = 5
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_MAX_MANIFEST_BYTES = 1024 * 1024  # 1 MiB
 _MODELS_DIR = Path(__file__).resolve().parent.parent / "data" / "models"
 
 
@@ -149,7 +162,7 @@ def _start_camera_and_ptz(cam_config: CameraConfig) -> None:
         buf = FrameBuffer()
         state.frame_buffers[cam_config.name] = buf
 
-    camera = RTSPCamera(rtsp_url=cam_config.rtsp_url, buffer=buf)
+    camera = RTSPCamera(rtsp_url=cam_config.rtsp_url, buffer=buf, name=cam_config.name)
     camera.start()
     state.cameras[cam_config.name] = camera
 
@@ -287,6 +300,11 @@ async def get_detection_configuration() -> DetectionConfig:
 @router.put("/api/detection/settings", response_model=DetectionConfig)
 async def update_detection_configuration(body: DetectionConfig) -> DetectionConfig:
     """Update the detection engine configuration and apply it at runtime."""
+    return await _apply_detection_config(body)
+
+
+async def _apply_detection_config(body: DetectionConfig) -> DetectionConfig:
+    """Persist a detection config, reload the backend, restart workers."""
     if body.backend == _ONNX_BACKEND_NAME:
         _validate_onnx_model_path(body.model_path)
 
@@ -305,20 +323,26 @@ def _safe_model_name(filename: str) -> str:
     return safe_name
 
 
-async def _write_model_chunks(safe_name: str, chunks: AsyncIterator[bytes]) -> Path:
+async def _write_model_chunks(
+    safe_name: str,
+    chunks: AsyncIterator[bytes],
+    expected_sha256: str | None = None,
+) -> Path:
     """Stream chunks to _MODELS_DIR/safe_name, enforcing the size cap.
 
     Chunks go to a temporary file in the same directory (never held in RAM,
     which matters on a Raspberry Pi with a 200 MB cap) and are only moved
     into place with an atomic os.replace() once the whole stream passes
-    validation, so a size-cap breach or network failure never leaves a
-    partial file behind or clobbers an existing model.
+    validation — including expected_sha256, when given — so a size-cap
+    breach, checksum mismatch or network failure never leaves a partial
+    file behind or clobbers an existing model.
     """
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)
     destination = _MODELS_DIR / safe_name
     fd, tmp_name = tempfile.mkstemp(dir=_MODELS_DIR, suffix=".part")
     tmp_path = Path(tmp_name)
     try:
+        digest = hashlib.sha256()
         with os.fdopen(fd, "wb") as tmp_file:
             written = 0
             async for chunk in chunks:
@@ -327,7 +351,13 @@ async def _write_model_chunks(safe_name: str, chunks: AsyncIterator[bytes]) -> P
                     raise HTTPException(
                         status_code=400, detail="Model file is too large"
                     )
+                digest.update(chunk)
                 await asyncio.to_thread(tmp_file.write, chunk)
+        if expected_sha256 is not None and digest.hexdigest() != expected_sha256:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Checksum mismatch for {safe_name}: download rejected",
+            )
         os.replace(tmp_path, destination)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
@@ -378,11 +408,13 @@ async def _validate_fetch_url(url: str) -> None:
     await _require_public_host(url)
 
 
-async def _stream_model_url(url: str, safe_name: str) -> Path:
-    """Download a remote .onnx file to _MODELS_DIR, enforcing the size cap.
+async def _fetch_validated[T](
+    url: str, consume: Callable[[httpx.Response], Awaitable[T]]
+) -> T:
+    """GET url and hand the final 200 response to consume().
 
     Redirects are followed manually (follow_redirects=False) so every hop is
-    re-validated: an https:// URL must not be able to bounce the download to
+    re-validated: an https:// URL must not be able to bounce the request to
     plain http:// or to an internal address.
     """
     timeout = httpx.Timeout(10.0, read=60.0)
@@ -405,13 +437,43 @@ async def _stream_model_url(url: str, safe_name: str) -> Path:
                             status_code=502,
                             detail=f"Fetch failed with status {response.status_code}",
                         )
-                    return await _write_model_chunks(
-                        safe_name, response.aiter_bytes(_MODEL_UPLOAD_CHUNK_BYTES)
-                    )
+                    return await consume(response)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Fetch failed: {exc}") from exc
 
     raise HTTPException(status_code=502, detail="Too many redirects")
+
+
+async def _stream_model_url(
+    url: str, safe_name: str, expected_sha256: str | None = None
+) -> Path:
+    """Download a remote .onnx file to _MODELS_DIR, enforcing the size cap."""
+
+    async def save(response: httpx.Response) -> Path:
+        return await _write_model_chunks(
+            safe_name, response.aiter_bytes(_MODEL_UPLOAD_CHUNK_BYTES), expected_sha256
+        )
+
+    return await _fetch_validated(url, save)
+
+
+async def _fetch_json(url: str, max_bytes: int) -> object:
+    """Download and decode a small JSON document, capped at max_bytes."""
+
+    async def read(response: httpx.Response) -> object:
+        body = bytearray()
+        async for chunk in response.aiter_bytes(_MODEL_UPLOAD_CHUNK_BYTES):
+            body.extend(chunk)
+            if len(body) > max_bytes:
+                raise HTTPException(status_code=502, detail="Response is too large")
+        try:
+            return json.loads(body)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502, detail="Response is not valid JSON"
+            ) from exc
+
+    return await _fetch_validated(url, read)
 
 
 @router.post("/api/detection/model")
@@ -443,3 +505,85 @@ async def fetch_detection_model(body: ModelFetchRequest) -> dict[str, str]:
 
     destination = await _stream_model_url(body.url, safe_name)
     return {"model_path": str(destination)}
+
+
+async def _load_catalog() -> ModelCatalog:
+    """Fetch and validate the minicam-models release manifest."""
+    data = await _fetch_json(catalog_url(), _MAX_MANIFEST_BYTES)
+    try:
+        return parse_manifest(data, _MAX_MODEL_UPLOAD_BYTES)
+    except InvalidManifestError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Invalid model catalog: {exc}"
+        ) from exc
+
+
+def _file_has_sha256(path: Path, sha256: str) -> bool:
+    if not path.is_file():
+        return False
+    digest = hashlib.sha256()
+    with path.open("rb") as model_file:
+        while chunk := model_file.read(_MODEL_UPLOAD_CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest() == sha256
+
+
+@router.get("/api/detection/catalog", response_model=ModelCatalogResponse)
+async def model_catalog() -> ModelCatalogResponse:
+    """List the models published by minicam-models and their local state.
+
+    `installed` is a cheap size check; installing re-verifies the sha256.
+    """
+    catalog = await _load_catalog()
+    detection = get_config().detection
+    active_path = (
+        Path(detection.model_path)
+        if detection.backend == _ONNX_BACKEND_NAME and detection.model_path
+        else None
+    )
+    assets = []
+    for asset in catalog.assets:
+        path = _MODELS_DIR / asset.name
+        assets.append(
+            CatalogAssetStatus(
+                **asset.model_dump(),
+                installed=path.is_file() and path.stat().st_size == asset.bytes,
+                active=active_path == path,
+            )
+        )
+    return ModelCatalogResponse(
+        catalog_url=catalog_url(), release=catalog.release, assets=assets
+    )
+
+
+@router.post("/api/detection/catalog/install", response_model=CatalogInstallResponse)
+async def install_catalog_model(body: CatalogInstallRequest) -> CatalogInstallResponse:
+    """Install a catalog model by name and, by default, make it active.
+
+    URL and checksum always come from a fresh copy of the manifest, never
+    from the client. A file already on disk with the right sha256 is reused;
+    otherwise the download is verified against the manifest's sha256 before
+    it replaces anything.
+    """
+    catalog = await _load_catalog()
+    asset = next((a for a in catalog.assets if a.name == body.name), None)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Model not found in catalog")
+
+    path = _MODELS_DIR / asset.name
+    if not await asyncio.to_thread(_file_has_sha256, path, asset.sha256):
+        path = await _stream_model_url(asset.url, asset.name, asset.sha256)
+        logger.info(
+            "Installed catalog model %s (release %s)", asset.name, catalog.release
+        )
+
+    if body.activate:
+        current = get_config().detection
+        await _apply_detection_config(
+            current.model_copy(
+                update={"backend": _ONNX_BACKEND_NAME, "model_path": str(path)}
+            )
+        )
+    return CatalogInstallResponse(
+        model_path=str(path), sha256=asset.sha256, active=body.activate
+    )

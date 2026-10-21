@@ -1,5 +1,6 @@
 import asyncio
 import threading
+from unittest.mock import patch
 
 import pytest
 
@@ -32,6 +33,16 @@ class TestFrameBufferBasics:
         buf = FrameBuffer()
         buf.write(make_frame(0))
         assert buf.read() is buf.read()
+
+    def test_seconds_since_write_is_none_before_any_write(self) -> None:
+        assert FrameBuffer().seconds_since_write(123.0) is None
+
+    def test_seconds_since_write_measures_from_last_write(self) -> None:
+        buf = FrameBuffer()
+        with patch("app.buffers.frame_buffer.time.monotonic", return_value=100.0):
+            buf.write(make_frame(0))
+        assert buf.seconds_since_write(102.5) == pytest.approx(2.5)
+        assert buf.seconds_since_write(99.0) == 0.0
 
     def test_write_after_shutdown_does_not_raise(self) -> None:
         buf = FrameBuffer()

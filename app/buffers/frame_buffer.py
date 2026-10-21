@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from app.models.frame import Frame
 
@@ -26,6 +27,7 @@ class FrameBuffer:
 
     def __init__(self) -> None:
         self._latest: Frame | None = None
+        self._written_at: float | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._new_frame: asyncio.Event | None = None
 
@@ -36,6 +38,7 @@ class FrameBuffer:
             frame: The decoded frame to store.
         """
         self._latest = frame
+        self._written_at = time.monotonic()
         loop = self._loop
         if loop is not None:
             try:
@@ -47,6 +50,13 @@ class FrameBuffer:
     def read(self) -> Frame | None:
         """Return the latest available frame, or None if none written yet."""
         return self._latest
+
+    def seconds_since_write(self, now: float) -> float | None:
+        """Seconds between the last write and `now` (time.monotonic()), or
+        None if nothing was ever written."""
+        if self._written_at is None:
+            return None
+        return max(0.0, now - self._written_at)
 
     async def next_frame(self, after: Frame | None = None) -> Frame:
         """Wait until the latest frame is not `after`, then return it.

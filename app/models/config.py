@@ -96,3 +96,47 @@ class ModelFetchRequest(BaseModel):
     """Request body to fetch a .onnx model from a remote URL."""
 
     url: str
+
+
+class CatalogAsset(BaseModel):
+    """One installable model file from a minicam-models release manifest."""
+
+    name: str
+    model: str
+    family: str
+    precision: str
+    profile: str
+    bytes: int
+    sha256: str
+    url: str
+
+
+class ModelCatalog(BaseModel):
+    release: str
+    assets: list[CatalogAsset]
+
+
+class CatalogAssetStatus(CatalogAsset):
+    """A catalog asset plus its state on this device."""
+
+    installed: bool
+    active: bool
+
+
+class ModelCatalogResponse(BaseModel):
+    catalog_url: str
+    release: str
+    assets: list[CatalogAssetStatus]
+
+
+class CatalogInstallRequest(BaseModel):
+    """Install a catalog asset by name; the server looks up URL and sha256."""
+
+    name: str
+    activate: bool = True
+
+
+class CatalogInstallResponse(BaseModel):
+    model_path: str
+    sha256: str
+    active: bool

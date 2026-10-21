@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import numpy as np
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 import app.state as state_module
@@ -1337,3 +1338,243 @@ class TestDetectionClassesEndpoint:
 
         assert res.status_code == 200
         assert res.json() == {"classes": []}
+
+
+_MODEL_BYTES = b"fake onnx model bytes"
+_MODEL_SHA256 = hashlib.sha256(_MODEL_BYTES).hexdigest()
+_ASSET_URL = "https://github.com/x/minicam-models/releases/download/v9/tiny-int8.onnx"
+
+
+def _catalog_manifest(**asset_overrides: object) -> dict[str, object]:
+    asset: dict[str, object] = {
+        "name": "tiny-int8.onnx",
+        "model": "tiny",
+        "family": "YOLO11",
+        "precision": "int8",
+        "profile": "Raspberry Pi 5 (CPU)",
+        "bytes": len(_MODEL_BYTES),
+        "sha256": _MODEL_SHA256,
+        "url": _ASSET_URL,
+    }
+    asset.update(asset_overrides)
+    return {
+        "schema_version": 1,
+        "release": "v9",
+        "contract": {
+            "input": {"shape": [1, 3, 640, 640]},
+            "output": {"shape": [1, 84, 8400]},
+            "classes": "coco80",
+            "nms": False,
+        },
+        "assets": [asset],
+    }
+
+
+@pytest.mark.usefixtures("resolve_host")
+class TestModelCatalog:
+    def test_lists_assets_with_local_state(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(
+                setup_router, "_fetch_json", AsyncMock(return_value=_catalog_manifest())
+            ),
+            patch.object(setup_router, "get_config", return_value=AppConfig()),
+        ):
+            res = client.get("/api/detection/catalog")
+
+        assert res.status_code == 200
+        body = res.json()
+        assert body["release"] == "v9"
+        assert body["catalog_url"].endswith("manifest.json")
+        assert body["assets"][0]["name"] == "tiny-int8.onnx"
+        assert body["assets"][0]["installed"] is False
+        assert body["assets"][0]["active"] is False
+
+    def test_marks_installed_and_active_model(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        model_path = tmp_path / "tiny-int8.onnx"
+        model_path.write_bytes(_MODEL_BYTES)
+        config = AppConfig(
+            detection=DetectionConfig(backend="onnx", model_path=str(model_path))
+        )
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(
+                setup_router, "_fetch_json", AsyncMock(return_value=_catalog_manifest())
+            ),
+            patch.object(setup_router, "get_config", return_value=config),
+        ):
+            asset = client.get("/api/detection/catalog").json()["assets"][0]
+
+        assert asset["installed"] is True
+        assert asset["active"] is True
+
+    def test_size_mismatch_is_not_reported_as_installed(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        (tmp_path / "tiny-int8.onnx").write_bytes(b"truncated")
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(
+                setup_router, "_fetch_json", AsyncMock(return_value=_catalog_manifest())
+            ),
+            patch.object(setup_router, "get_config", return_value=AppConfig()),
+        ):
+            asset = client.get("/api/detection/catalog").json()["assets"][0]
+
+        assert asset["installed"] is False
+
+    def test_invalid_manifest_returns_502(self, client: TestClient) -> None:
+        bad = _catalog_manifest()
+        bad["schema_version"] = 99
+        with patch.object(setup_router, "_fetch_json", AsyncMock(return_value=bad)):
+            res = client.get("/api/detection/catalog")
+
+        assert res.status_code == 502
+        assert "Invalid model catalog" in res.json()["detail"]
+
+    def test_fetches_manifest_from_configured_url(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pinned = "https://example.com/releases/download/v1/manifest.json"
+        monkeypatch.setenv("MINICAM_MODEL_CATALOG_URL", pinned)
+        fetch = AsyncMock(return_value=_catalog_manifest())
+        with (
+            patch.object(setup_router, "_fetch_json", fetch),
+            patch.object(setup_router, "get_config", return_value=AppConfig()),
+        ):
+            client.get("/api/detection/catalog")
+
+        assert fetch.call_args.args[0] == pinned
+
+
+@pytest.mark.usefixtures("resolve_host")
+class TestInstallCatalogModel:
+    def _post(
+        self,
+        client: TestClient,
+        tmp_path: Path,
+        fake: _FakeAsyncClient,
+        apply: AsyncMock,
+        manifest: dict[str, object] | None = None,
+        **body: object,
+    ) -> httpx.Response:
+        with (
+            patch.object(setup_router, "_MODELS_DIR", tmp_path),
+            patch.object(
+                setup_router,
+                "_fetch_json",
+                AsyncMock(return_value=manifest or _catalog_manifest()),
+            ),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+            patch.object(setup_router, "_apply_detection_config", apply),
+            patch.object(setup_router, "get_config", return_value=AppConfig()),
+        ):
+            return client.post(
+                "/api/detection/catalog/install",
+                json={"name": "tiny-int8.onnx", **body},
+            )
+
+    def test_downloads_verifies_and_activates(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [_MODEL_BYTES]))
+        apply = AsyncMock()
+
+        res = self._post(client, tmp_path, fake, apply)
+
+        assert res.status_code == 200
+        model_path = tmp_path / "tiny-int8.onnx"
+        assert res.json() == {
+            "model_path": str(model_path),
+            "sha256": _MODEL_SHA256,
+            "active": True,
+        }
+        assert model_path.read_bytes() == _MODEL_BYTES
+        assert fake.requested_urls == [_ASSET_URL]
+        applied = apply.call_args.args[0]
+        assert applied.backend == "onnx"
+        assert applied.model_path == str(model_path)
+
+    def test_activate_false_only_installs(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [_MODEL_BYTES]))
+        apply = AsyncMock()
+
+        res = self._post(client, tmp_path, fake, apply, activate=False)
+
+        assert res.status_code == 200
+        assert res.json()["active"] is False
+        apply.assert_not_called()
+
+    def test_checksum_mismatch_rejects_download_and_keeps_old_file(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        (tmp_path / "tiny-int8.onnx").write_bytes(b"previous")
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [b"tampered!"]))
+        apply = AsyncMock()
+
+        res = self._post(client, tmp_path, fake, apply)
+
+        assert res.status_code == 502
+        assert "Checksum mismatch" in res.json()["detail"]
+        assert (tmp_path / "tiny-int8.onnx").read_bytes() == b"previous"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["tiny-int8.onnx"]
+        apply.assert_not_called()
+
+    def test_reuses_file_already_on_disk_with_matching_sha256(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        (tmp_path / "tiny-int8.onnx").write_bytes(_MODEL_BYTES)
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [b"unused"]))
+
+        res = self._post(client, tmp_path, fake, AsyncMock())
+
+        assert res.status_code == 200
+        assert fake.requested_urls == []
+
+    def test_unknown_model_returns_404(self, client: TestClient) -> None:
+        fake = _FakeAsyncClient()
+        with (
+            patch.object(
+                setup_router, "_fetch_json", AsyncMock(return_value=_catalog_manifest())
+            ),
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+        ):
+            res = client.post(
+                "/api/detection/catalog/install", json={"name": "nope.onnx"}
+            )
+
+        assert res.status_code == 404
+        assert fake.called is False
+
+
+@pytest.mark.usefixtures("resolve_host")
+class TestFetchJson:
+    async def test_decodes_json(self) -> None:
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [b'{"a": ', b"1}"]))
+        with patch.object(setup_router.httpx, "AsyncClient", fake):
+            assert await setup_router._fetch_json(
+                "https://example.com/m.json", 100
+            ) == {"a": 1}
+
+    async def test_rejects_oversized_response(self) -> None:
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [b"x" * 50]))
+        with (
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await setup_router._fetch_json("https://example.com/m.json", 10)
+        assert exc_info.value.status_code == 502
+
+    async def test_rejects_invalid_json(self) -> None:
+        fake = _FakeAsyncClient(response=_FakeFetchResponse(200, [b"not json"]))
+        with (
+            patch.object(setup_router.httpx, "AsyncClient", fake),
+            pytest.raises(HTTPException, match="not valid JSON"),
+        ):
+            await setup_router._fetch_json("https://example.com/m.json", 100)

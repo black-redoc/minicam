@@ -28,6 +28,7 @@ module.exports = [
       "app/static/js/config.js",
       "app/static/js/admin.js",
       "app/static/js/ai-detection.js",
+      "app/static/js/model-catalog.js",
     ],
     languageOptions: {
       globals: {
@@ -43,6 +44,16 @@ module.exports = [
     languageOptions: {
       globals: {
         confirmDialog: "readonly",
+      },
+    },
+  },
+  {
+    // model-catalog.js reloads the settings form via detectionSettingsPage,
+    // defined in ai-detection.js (loaded first on the same page).
+    files: ["app/static/js/model-catalog.js"],
+    languageOptions: {
+      globals: {
+        detectionSettingsPage: "readonly",
       },
     },
   },

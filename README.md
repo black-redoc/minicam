@@ -48,10 +48,11 @@ main.py                 App entry point: lifespan starts each camera's RTSP
                         capture, PTZ service and detection worker; mounts routers
 app/
   routers/              HTTP/WebSocket endpoints: auth, dashboard, stream, ptz,
-                        setup (cameras, detection), docs
+                        setup (cameras, detection, model catalog), health, docs
   services/             Camera capture/decoding, JPEG encoding, ONVIF PTZ and
                         discovery, auth, authorization, LAN/WAN classification,
-                        Cloudflare Access verification, stream tokens
+                        Cloudflare Access verification, stream tokens,
+                        minicam-models catalog parsing
     detection/          Pluggable object detection (ONNX backend, NMS, worker)
   buffers/              Per-camera frame buffer shared by capture and viewers
   models/               Pydantic and domain models (config, auth, frames)
@@ -77,7 +78,9 @@ migrate_env_to_toml.py  One-off migration from the old .env camera config
 At runtime the app also creates the SQLite database (`MINICAM_DB_PATH`),
 writes `config.toml` whenever cameras or detection settings are edited from the
 UI (it starts with defaults if the file is missing), and stores uploaded or
-fetched detection models in `app/data/models/`.
+fetched detection models (including ones installed from the
+[minicam-models](https://github.com/black-redoc/minicam-models) catalog on the
+AI Detection page) in `app/data/models/`.
 
 ## Deployment
 
@@ -91,6 +94,13 @@ sudo cp deploy/minicam.service /etc/systemd/system/minicam.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now minicam.service
 ```
+
+Replace `<user>` and the checkout path in the unit first. The unit is
+sandboxed: everything is read-only except the checkout and uv's cache, so if
+you keep the checkout or `MINICAM_DB_PATH` somewhere else, update
+`ReadWritePaths` too. After a change, check that the app still starts
+(`journalctl -u minicam -e`) and review the score with
+`systemd-analyze security minicam.service`.
 
 `cloudflared` (the tunnel that exposes this instance to WAN through
 Cloudflare Access) is supervised separately. To set it up from scratch

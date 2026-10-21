@@ -175,6 +175,7 @@ class DetectionSettingsPage {
     }
 }
 
+/* exported detectionSettingsPage */
 const detectionSettingsPage = new DetectionSettingsPage(
     /** @type {HTMLFormElement} */ (document.getElementById('detection-settings-form')),
 );

@@ -13,5 +13,44 @@ ExecStart=/home/<user>/.local/bin/uv run fastapi run main.py --host 0.0.0.0 --po
 Restart=on-failure
 RestartSec=5s
 
+# ── Sandboxing ────────────────────────────────────────────────────────
+# Check the result with: systemd-analyze security minicam.service
+#
+# The whole filesystem is read-only except what the app writes at runtime:
+# the checkout (config.toml, minicam.db, app/data/models/, .venv) and uv's
+# cache (`uv run` may sync .venv on start). If you move MINICAM_DB_PATH or
+# the checkout, update ReadWritePaths to match.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/<user>/Development/minicam /home/<user>/.cache/uv
+PrivateTmp=true
+# Files the app creates (config.toml, the database) are private by default.
+UMask=0077
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+
+# No hardware access is needed today (cameras are reached over RTSP/ONVIF).
+# A future Hailo accelerator backend would need DeviceAllow=/dev/hailo0 and
+# PrivateDevices=false.
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+
+# IP for HTTP/RTSP/ONVIF and WS-Discovery multicast; UNIX and NETLINK for
+# local name resolution and network interface enumeration.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# MemoryDenyWriteExecute is deliberately not set: onnxruntime and other
+# native wheels may need writable+executable memory.
+
 [Install]
 WantedBy=multi-user.target

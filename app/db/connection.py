@@ -11,29 +11,85 @@ directly into repositories.
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 from pathlib import Path
 
 import aiosqlite
 
+logger = logging.getLogger(__name__)
+
 _MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+_SCHEMA_MIGRATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version     TEXT PRIMARY KEY,
+    applied_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+)
+"""
 
 _connection: aiosqlite.Connection | None = None
 
 
-async def apply_migrations(conn: aiosqlite.Connection) -> None:
-    """Run every .sql file in db/migrations, in filename order.
+def split_sql_statements(script: str) -> list[str]:
+    """Split a migration script into single statements.
 
-    Safe to call against a database that already has the schema applied:
-    every statement in the migrations uses IF NOT EXISTS, so re-running is
-    a no-op. This matters because both init_db() (server startup) and the
-    CLI (app/cli/create_user.py) call this independently against the same
-    file — without idempotent DDL, running the CLI once and then starting
-    the server would fail with "table already exists".
+    Uses sqlite3.complete_statement(), so trigger bodies (BEGIN ... END;)
+    stay in one piece. Expects each statement to end its own line.
+
+    Raises:
+        ValueError: if the script ends with an unterminated statement.
     """
-    for migration_path in sorted(_MIGRATIONS_DIR.glob("*.sql")):
-        script = migration_path.read_text(encoding="utf-8")
-        await conn.executescript(script)
+    statements: list[str] = []
+    current = ""
+    for line in script.splitlines(keepends=True):
+        current += line
+        if sqlite3.complete_statement(current):
+            statements.append(current.strip())
+            current = ""
+    leftover = [
+        line
+        for line in current.splitlines()
+        if line.strip() and not line.strip().startswith("--")
+    ]
+    if leftover:
+        raise ValueError(f"Unterminated SQL statement: {current.strip()[:80]!r}")
+    return statements
+
+
+async def apply_migrations(conn: aiosqlite.Connection) -> None:
+    """Apply every db/migrations/*.sql file not yet recorded, in name order.
+
+    Each migration runs in its own BEGIN IMMEDIATE transaction together with
+    the schema_migrations row that records it, so it is applied exactly
+    once and either fully or not at all — even when the CLI
+    (app/cli/create_user.py) and the server start against the same file at
+    the same time: the second one waits for the write lock, then sees the
+    version already recorded. Migrations may therefore use plain ALTER
+    TABLE; they no longer need to be idempotent. A database created before
+    versioning existed simply records 0001 on first run (its DDL is
+    IF NOT EXISTS, so re-running it is a no-op).
+    """
+    await conn.execute(_SCHEMA_MIGRATIONS_DDL)
     await conn.commit()
+    for migration_path in sorted(_MIGRATIONS_DIR.glob("*.sql")):
+        version = migration_path.stem
+        statements = split_sql_statements(migration_path.read_text(encoding="utf-8"))
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await conn.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = ?", (version,)
+            )
+            if await cursor.fetchone() is None:
+                for statement in statements:
+                    await conn.execute(statement)
+                await conn.execute(
+                    "INSERT INTO schema_migrations (version) VALUES (?)", (version,)
+                )
+                logger.info("Applied database migration %s", version)
+            await conn.commit()
+        except BaseException:
+            await conn.rollback()
+            raise
 
 
 async def init_db(db_path: str | Path) -> aiosqlite.Connection:
