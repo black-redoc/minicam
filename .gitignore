@@ -49,6 +49,12 @@ credentials.json
 *.sqlite3*
 
 # =============================================================================
+# Detection models uploaded/fetched at runtime (app/routers/setup.py
+# _MODELS_DIR, up to 200 MB each — published by the minicam-models repo)
+# =============================================================================
+app/data/models/
+
+# =============================================================================
 # Testing & coverage
 # =============================================================================
 .pytest_cache/
