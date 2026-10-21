@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -29,7 +31,14 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
 
 
 def save_config(config: AppConfig, path: Path = _CONFIG_PATH) -> None:
-    """Serialise AppConfig to TOML and apply chmod 600."""
+    """Serialise AppConfig to TOML, atomically, with mode 600 from the start.
+
+    The file holds camera passwords, so it is written to a temp file in the
+    same directory that is already 0600 before any byte lands in it, fsynced,
+    then moved over the target with os.replace(). The target is therefore
+    never briefly world-readable, and a crash mid-write leaves the previous
+    config intact instead of a truncated one.
+    """
     cameras = [cam.model_dump(exclude={"rtsp_url"}) for cam in config.cameras]
     doc: dict[str, object] = {
         "app": {
@@ -40,8 +49,20 @@ def save_config(config: AppConfig, path: Path = _CONFIG_PATH) -> None:
         "cameras": cameras,
         "detection": config.detection.model_dump(),
     }
-    path.write_bytes(tomli_w.dumps(doc).encode())
-    path.chmod(0o600)
+    data = tomli_w.dumps(doc).encode()
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as tmp_file:
+            tmp_file.write(data)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 def add_camera(camera: CameraConfig, path: Path = _CONFIG_PATH) -> AppConfig:
