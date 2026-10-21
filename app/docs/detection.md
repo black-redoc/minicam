@@ -28,14 +28,18 @@ Any misconfiguration (backend set to `"onnx"` but the model file is missing, or 
 
 ## Getting a model file
 
-The model is not committed to this repository. The recommended source is the `minicam_weights` companion repo, which runs a GitHub Actions pipeline that exports pinned YOLOv8 models to ONNX and publishes them as GitHub Release assets — each release includes a sha256 checksum per asset and a `manifest.json` recording the exact `ultralytics` version used.
+The model is not committed to this repository. The recommended source is the [`minicam-models`](https://github.com/black-redoc/minicam-models) companion repo, which runs a GitHub Actions pipeline that exports pinned YOLOv8 and YOLO11 models to ONNX, validates every file against the contract described above, and publishes them as GitHub Release assets. Each release includes a `SHA256SUMS` file, a `manifest.json` recording the exact toolchain versions (`ultralytics`, `torch`, `onnxruntime`), and release notes listing the URL of every asset.
 
-| Device profile | Asset | Notes |
-|---|---|---|
-| Raspberry Pi 5 (CPU-only) | `yolov8n-cpu.onnx` | Smaller network, faster on ARM CPU |
-| Old x86 PC (CPU-only) | `yolov8s-cpu.onnx` | Larger network, more accurate |
+Assets are named `<model>-<precision>.onnx`:
 
-Both assets share the same input/output contract described above, so the ONNX backend needs no changes between them — only `MINICAM_DETECTION_MODEL_PATH` changes. A Hailo-accelerated profile isn't published yet: the Hailo backend doesn't exist in minicam yet (only driver-presence detection), so there's nothing to consume a `.hef` export.
+| Device profile | Recommended asset | Alternatives | Notes |
+|---|---|---|---|
+| Raspberry Pi 5 (CPU-only) | `yolo11n-int8.onnx` | `yolov8n-int8.onnx`, `yolo11n-fp32.onnx`, `yolov8n-fp32.onnx` | Small network; INT8 is ~2.5x smaller and faster on ARM CPU |
+| Old x86 PC (CPU-only) | `yolo11s-fp32.onnx` | `yolov8s-fp32.onnx`, `yolo11s-int8.onnx`, `yolov8s-int8.onnx` | Larger network, more accurate |
+
+INT8 assets keep float32 input and output, so they are drop-in replacements for their FP32 counterparts. The newest version of any asset is always available at `https://github.com/black-redoc/minicam-models/releases/latest/download/<asset>`.
+
+All assets share the same input/output contract described above, so the ONNX backend needs no changes between them — only `MINICAM_DETECTION_MODEL_PATH` changes. A Hailo-accelerated profile isn't published yet: the Hailo backend doesn't exist in minicam yet (only driver-presence detection), so there's nothing to consume a `.hef` export.
 
 To install a release asset, either:
 - Paste the asset's GitHub Release URL into the dashboard's AI Detection page ("Fetch from URL"), which calls `POST /api/detection/model/fetch` to download it server-side, or
@@ -45,10 +49,10 @@ The URL fetch only accepts `https://` URLs whose host resolves to a public addre
 
 Either way, the endpoint returns the file's path on disk — copy it into `model_path` and save to activate it (or set `MINICAM_DETECTION_MODEL_PATH` directly and skip the dashboard).
 
-For a one-off or custom export (a different model size, a different `ultralytics` version) that doesn't go through the pipeline, the same command it runs can be used directly:
+For a one-off or custom export that doesn't go through the pipeline, check the file with the same validator the pipeline uses before installing it:
 
 ```
-uv run --with ultralytics==8.4.95 yolo export model=yolov8n.pt format=onnx
+uvx --from git+https://github.com/black-redoc/minicam-models minicam-models validate path/to/model.onnx
 ```
 
 Record the exact `ultralytics` version and the resulting file's checksum wherever you track deployment artifacts for that device, then copy the `.onnx` file to the path `MINICAM_DETECTION_MODEL_PATH` points to.
