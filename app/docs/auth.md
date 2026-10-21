@@ -85,7 +85,7 @@ Lists every camera permission granted to that user.
 
 ## Managing Users (admin-only)
 
-There is no self-service signup — every account is created by an existing admin (or via the CLI, for the very first one).
+There is no self-service signup — every account is created by an existing admin. The only exception is the very first account, created through first-run setup (see [Bootstrapping](#bootstrapping)).
 
 ```
 POST /api/auth/users
@@ -126,4 +126,15 @@ Classification is fail-safe: any request that can't be confidently placed on the
 
 ## Bootstrapping
 
-The very first admin account can't be created through the API (every admin endpoint requires an existing admin), so it's created via CLI instead. See [Configuration](/doc/configuration#bootstrapping-the-first-admin).
+While the `users` table is empty, `/login` shows a **Create admin account** form instead of the sign-in form. Submitting it creates the first account as an admin and signs it in; from then on `/login` only ever shows the normal sign-in form.
+
+```
+GET  /api/auth/setup   -> { "setup_required": true | false }
+POST /api/auth/setup   { "email": "...", "password": "..." }   (password min. 8 chars)
+```
+
+- `201` — admin created, session cookie set (same cookie as `/api/auth/login`).
+- `409` — any account already exists. Setup can succeed only once: the emptiness check and the insert are a single atomic SQL statement (`SQLiteUserRepository.create_first_admin`), so two concurrent requests can't both win.
+- `403` — the request was classified as WAN. First-run setup is LAN-only so an unconfigured device can't be claimed by whoever reaches it first through the Cloudflare tunnel.
+
+The CLI remains available as an alternative (for example on a headless install). See [Configuration](/doc/configuration#bootstrapping-the-first-admin).

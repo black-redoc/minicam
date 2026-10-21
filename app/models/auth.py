@@ -29,6 +29,17 @@ class CreateUserRequest(BaseModel):
     is_admin: bool = False
 
 
+class FirstAdminRequest(BaseModel):
+    """First-run setup: the account created while no user exists yet."""
+
+    email: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=8)
+
+
+class SetupStatusResponse(BaseModel):
+    setup_required: bool
+
+
 class SetPermissionRequest(BaseModel):
     user_id: int
     camera_name: str = Field(..., min_length=1)

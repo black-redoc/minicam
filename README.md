@@ -58,7 +58,7 @@ app/
   repositories/         SQLite access: users, sessions, permissions, wan_access
   db/                   Connection setup and SQL migrations
   middleware/           Security headers
-  cli/                  `create_user` (bootstrap the first admin)
+  cli/                  `create_user` (create the first admin from the shell)
   settings.py           config.toml loader (cameras, detection)
   security_settings.py  Environment-based security config (.env)
   dependencies.py       FastAPI dependency wiring for the security layer

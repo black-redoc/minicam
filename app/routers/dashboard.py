@@ -5,9 +5,11 @@ from fastapi.templating import Jinja2Templates
 from app.dependencies import (
     get_authorization_service,
     get_optional_current_user,
+    get_user_repository,
     require_admin,
 )
 from app.models.domain import User
+from app.repositories.user_repository import UserRepository
 from app.services.authorization import AuthorizationService
 from app.settings import get_config
 
@@ -16,11 +18,21 @@ templates = Jinja2Templates(directory="app/templates")
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request) -> HTMLResponse:
-    """Serve the login form. Renders even if already authenticated — the
-    client-side script redirects to '/' once a session cookie is confirmed.
+async def login_page(
+    request: Request,
+    user_repository: UserRepository = Depends(get_user_repository),
+) -> HTMLResponse:
+    """Serve the login form, or the first-admin form while no user exists.
+
+    Renders even if already authenticated — the client-side script redirects
+    to '/' once a session cookie is confirmed.
     """
-    return templates.TemplateResponse(request=request, name="login.html")
+    setup_required = await user_repository.count_users() == 0
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={"setup_required": setup_required},
+    )
 
 
 @router.get("/", response_model=None)

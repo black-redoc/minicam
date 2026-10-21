@@ -126,7 +126,9 @@ Every new install needs its own `MINICAM_JWT_SECRET` before the first start — 
 
 ## Bootstrapping the First Admin
 
-There is no self-service signup and every admin-only endpoint requires an existing admin, so the first account must be created out-of-band with the CLI:
+On a fresh install (empty database), open `http://<device-ip>:8080/login` from the local network: instead of the sign-in form it shows **Create admin account**. Enter an email and a password (min. 8 characters); that account becomes the administrator and you are signed in. Every later visit to `/login` shows only the normal sign-in form. This form is refused over WAN (the Cloudflare tunnel), so do this step on the device's network.
+
+Alternatively, create the first admin out-of-band with the CLI:
 
 ```
 uv run python -m app.cli.create_user --email admin@example.com --admin
