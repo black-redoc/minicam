@@ -1,3 +1,4 @@
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -264,6 +265,31 @@ class TestWebSocketStreamDetectionOverlay:
 
         mock_draw.assert_not_called()
         mock_encode.assert_called_once()
+        assert mock_encode.call_args.args[0] is frame.image
+
+    def test_expired_snapshot_is_not_drawn(self) -> None:
+        frame = _make_frame(sequence=1)
+        mock_buffer = MagicMock()
+        mock_buffer.read.return_value = frame
+        state_module.frame_buffers["cam1"] = mock_buffer
+        detection = Detection(
+            class_name="person", confidence=0.9, x1=1, y1=1, x2=2, y2=2
+        )
+        state_module.detection_results["cam1"] = DetectionSnapshot(
+            detections=[detection], sequence=1, expires_at=time.monotonic() - 1
+        )
+
+        client = TestClient(_app_with_valid_token())
+        with (
+            patch.object(stream_router, "draw_detections") as mock_draw,
+            patch.object(
+                stream_router, "encode_jpeg", return_value=b"jpeg"
+            ) as mock_encode,
+        ):
+            with client.websocket_connect("/ws/stream/cam1?token=valid") as ws:
+                ws.receive_bytes()
+
+        mock_draw.assert_not_called()
         assert mock_encode.call_args.args[0] is frame.image
 
 

@@ -57,6 +57,7 @@ Record the exact `ultralytics` version and the resulting file's checksum whereve
 
 - One background task per camera with active detection classes (`app/services/detection/worker.py`) reads the camera's frame buffer at `MINICAM_DETECTION_INFERENCE_FPS` and runs inference **once per camera**, regardless of how many browser tabs are watching that camera's stream — inference is far more expensive than the per-viewer JPEG encode already documented in [Video Streaming](/doc/stream), so it must not scale with viewer count.
 - Bounding boxes are drawn directly on each viewer's frame right before JPEG encoding, using plain numpy (no Pillow/OpenCV — see the note in `app/services/encoder.py` about why Pillow was already ruled out on this exact hot path). Each detected class gets a deterministic border color; there are no text labels in this version.
+- Each detection result expires after 3 expected result periods (inference interval + last inference time, minimum 1 s). If detection stalls or keeps failing, viewers get the plain frame instead of boxes that no longer match the picture.
 - Detection classes are validated server-side: `POST`/`PUT /api/cameras` rejects any class name the active backend doesn't recognize with a `400`.
 - Creating, editing, renaming, or deleting a camera starts/stops its detection worker the same way it already starts/stops the camera's RTSP capture and PTZ service — see `app/routers/setup.py`.
 

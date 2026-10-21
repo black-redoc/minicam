@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from app.services.detection.base import Detection
@@ -23,13 +25,30 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# A snapshot stays drawable for this many expected result periods (sleep
+# interval + last inference time), so one slow or failed inference does not
+# make boxes flicker, but a stalled or repeatedly failing backend stops
+# overlaying boxes that no longer match the live picture.
+_SNAPSHOT_TTL_PERIODS = 3
+_MIN_SNAPSHOT_TTL_SECONDS = 1.0
+
 
 @dataclass(frozen=True, slots=True)
 class DetectionSnapshot:
-    """Detections produced from a single source frame."""
+    """Detections produced from a single source frame.
+
+    expires_at is a time.monotonic() deadline after which the detections
+    are too old to draw; it defaults to never so snapshots built outside the
+    worker (tests, fakes) behave as before. Excluded from equality since it
+    is a delivery detail, not part of the detection result.
+    """
 
     detections: list[Detection]
     sequence: int
+    expires_at: float = field(default=math.inf, compare=False)
+
+    def is_expired(self, now: float) -> bool:
+        return now >= self.expires_at
 
 
 class DetectionWorker:
@@ -43,6 +62,7 @@ class DetectionWorker:
         allowed_classes: frozenset[str],
         interval_seconds: float,
         on_result: Callable[[DetectionSnapshot], None],
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._camera_name = camera_name
         self._buffer = buffer
@@ -50,6 +70,7 @@ class DetectionWorker:
         self._allowed_classes = allowed_classes
         self._interval_seconds = interval_seconds
         self._on_result = on_result
+        self._clock = clock
         self._last_sequence: int | None = None
 
     async def run(self) -> None:
@@ -77,6 +98,7 @@ class DetectionWorker:
         if frame is None or frame.sequence == self._last_sequence:
             return None
 
+        started_at = self._clock()
         try:
             detections = await loop.run_in_executor(
                 None, self._backend.detect, frame.image, self._allowed_classes
@@ -92,4 +114,11 @@ class DetectionWorker:
             return None
 
         self._last_sequence = frame.sequence
-        return DetectionSnapshot(detections=detections, sequence=frame.sequence)
+        finished_at = self._clock()
+        expected_period = self._interval_seconds + (finished_at - started_at)
+        ttl = max(_MIN_SNAPSHOT_TTL_SECONDS, _SNAPSHOT_TTL_PERIODS * expected_period)
+        return DetectionSnapshot(
+            detections=detections,
+            sequence=frame.sequence,
+            expires_at=finished_at + ttl,
+        )
