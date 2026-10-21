@@ -92,6 +92,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now minicam.service
 ```
 
+Replace `<user>` and the checkout path in the unit first. The unit is
+sandboxed: everything is read-only except the checkout and uv's cache, so if
+you keep the checkout or `MINICAM_DB_PATH` somewhere else, update
+`ReadWritePaths` too. After a change, check that the app still starts
+(`journalctl -u minicam -e`) and review the score with
+`systemd-analyze security minicam.service`.
+
 `cloudflared` (the tunnel that exposes this instance to WAN through
 Cloudflare Access) is supervised separately. To set it up from scratch
 (install, tunnel, hostname, Access policy, `.env` values), follow
