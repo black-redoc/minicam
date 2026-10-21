@@ -16,6 +16,12 @@ class UserRepository(Protocol):
 
     async def create(self, email: str, password_hash: str, is_admin: bool) -> User: ...
 
+    async def create_first_admin(
+        self, email: str, password_hash: str
+    ) -> User | None: ...
+
+    async def count_users(self) -> int: ...
+
     async def list_all(self) -> list[User]: ...
 
     async def count_admins(self) -> int: ...
@@ -66,6 +72,33 @@ class SQLiteUserRepository:
         await self._conn.commit()
         assert row is not None  # INSERT ... RETURNING always yields a row
         return _row_to_user(row)
+
+    async def create_first_admin(self, email: str, password_hash: str) -> User | None:
+        """Create an admin only if the users table is still empty.
+
+        A single INSERT ... SELECT ... WHERE NOT EXISTS, so the emptiness check
+        and the insert are one atomic statement: two concurrent first-run
+        setups can never both succeed. Returns None if any user already exists.
+        """
+        cursor = await self._conn.execute(
+            """
+            INSERT INTO users (email, password_hash, is_admin)
+            SELECT ?, ?, 1
+            WHERE NOT EXISTS (SELECT 1 FROM users)
+            RETURNING *
+            """,
+            (email, password_hash),
+        )
+        row = await cursor.fetchone()
+        await self._conn.commit()
+        return _row_to_user(row) if row is not None else None
+
+    async def count_users(self) -> int:
+        cursor = await self._conn.execute("SELECT COUNT(*) FROM users")
+        row = await cursor.fetchone()
+        assert row is not None  # COUNT(*) always yields exactly one row
+        count: int = row[0]
+        return count
 
     async def list_all(self) -> list[User]:
         cursor = await self._conn.execute("SELECT * FROM users ORDER BY email")

@@ -22,8 +22,10 @@ from app.dependencies import (
 from app.models.auth import (
     CameraPermissionPublic,
     CreateUserRequest,
+    FirstAdminRequest,
     LoginRequest,
     SetPermissionRequest,
+    SetupStatusResponse,
     UserPublic,
 )
 from app.models.domain import User
@@ -39,6 +41,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 _INVALID_CREDENTIALS_MESSAGE = "Invalid email or password"
 _TOO_MANY_ATTEMPTS_MESSAGE = "Too many login attempts, try again later"
+_SETUP_DONE_MESSAGE = "Setup already completed"
+_SETUP_LAN_ONLY_MESSAGE = "First-run setup is only available from the local network"
 
 
 def _iso8601_after(seconds: int) -> str:
@@ -80,6 +84,76 @@ async def login(
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, _INVALID_CREDENTIALS_MESSAGE)
 
+    await _open_session(
+        user,
+        request,
+        response,
+        session_repository,
+        token_service,
+        settings,
+        network_zone,
+    )
+    return _to_public(user)
+
+
+@router.get("/setup", response_model=SetupStatusResponse)
+async def setup_status(
+    user_repository: UserRepository = Depends(get_user_repository),
+) -> SetupStatusResponse:
+    """Report whether first-run setup is still pending (no user exists yet)."""
+    return SetupStatusResponse(setup_required=await user_repository.count_users() == 0)
+
+
+@router.post("/setup", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
+async def complete_setup(
+    body: FirstAdminRequest,
+    request: Request,
+    response: Response,
+    user_repository: UserRepository = Depends(get_user_repository),
+    session_repository: SessionRepository = Depends(get_session_repository),
+    password_hasher: PasswordHasher = Depends(get_password_hasher),
+    token_service: TokenService = Depends(get_token_service),
+    settings: SecuritySettings = Depends(get_security_settings),
+    network_zone: NetworkZone = Depends(get_network_zone),
+) -> UserPublic:
+    """Create the first admin account and sign it in.
+
+    Only works while the users table is empty, and only from the LAN: an
+    unconfigured device must not be claimable by whoever reaches it first
+    through the tunnel. Once any account exists this returns 409 forever.
+    """
+    if network_zone is not NetworkZone.LAN:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _SETUP_LAN_ONLY_MESSAGE)
+
+    user = await user_repository.create_first_admin(
+        body.email, password_hasher.hash(body.password)
+    )
+    if user is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, _SETUP_DONE_MESSAGE)
+
+    await _open_session(
+        user,
+        request,
+        response,
+        session_repository,
+        token_service,
+        settings,
+        network_zone,
+    )
+    return _to_public(user)
+
+
+async def _open_session(
+    user: User,
+    request: Request,
+    response: Response,
+    session_repository: SessionRepository,
+    token_service: TokenService,
+    settings: SecuritySettings,
+    network_zone: NetworkZone,
+) -> None:
+    """Persist a revocable session for user and set the session cookie."""
+    client_ip = request.client.host if request.client else "unknown"
     jti = uuid.uuid4().hex
     expires_at = _iso8601_after(settings.session_ttl_seconds)
     await session_repository.create(
@@ -101,7 +175,6 @@ async def login(
         secure=(network_zone is NetworkZone.WAN),
         path="/",
     )
-    return _to_public(user)
 
 
 @router.post("/logout")

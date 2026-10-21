@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}minicam — Sign in{% endblock %}
+{% block title %}minicam — {% if setup_required %}Create admin account{% else %}Sign in{% endif %}{% endblock %}
 
 {% block content %}
 
@@ -11,6 +11,51 @@
             <span class="text-sky-400 font-bold tracking-tight text-base">minicam</span>
         </div>
 
+        {% if setup_required %}
+        <div class="flex flex-col gap-1">
+            <h1 class="text-sm font-semibold text-slate-100">Create admin account</h1>
+            <p class="text-xs text-slate-400">
+                No account exists on this device yet. The account you create here
+                becomes the administrator.
+            </p>
+        </div>
+
+        <form id="setup-form" class="flex flex-col gap-4">
+            <div class="flex flex-col gap-1">
+                <label for="email" class="text-xs text-slate-400">Email</label>
+                <input id="email" name="email" type="email" required autocomplete="username"
+                       class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
+                              text-sm text-slate-100 focus:outline-none focus:ring-2
+                              focus:ring-sky-500">
+            </div>
+
+            <div class="flex flex-col gap-1">
+                <label for="password" class="text-xs text-slate-400">Password (min. 8 characters)</label>
+                <input id="password" name="password" type="password" required minlength="8"
+                       autocomplete="new-password"
+                       class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
+                              text-sm text-slate-100 focus:outline-none focus:ring-2
+                              focus:ring-sky-500">
+            </div>
+
+            <div class="flex flex-col gap-1">
+                <label for="password-confirm" class="text-xs text-slate-400">Confirm password</label>
+                <input id="password-confirm" name="password-confirm" type="password" required
+                       minlength="8" autocomplete="new-password"
+                       class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
+                              text-sm text-slate-100 focus:outline-none focus:ring-2
+                              focus:ring-sky-500">
+            </div>
+
+            <p id="setup-error" class="hidden text-xs text-red-400" role="alert"></p>
+
+            <button type="submit"
+                    class="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold
+                           text-sm rounded-lg py-2 transition-colors">
+                Create account
+            </button>
+        </form>
+        {% else %}
         <form id="login-form" class="flex flex-col gap-4">
             <div class="flex flex-col gap-1">
                 <label for="email" class="text-xs text-slate-400">Email</label>
@@ -37,6 +82,7 @@
                 Sign in
             </button>
         </form>
+        {% endif %}
     </div>
 </main>
 
@@ -44,12 +90,13 @@
 
 {% block scripts %}
 <script>
-    document.getElementById('login-form').addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const errorEl = document.getElementById('login-error');
-        errorEl.classList.add('hidden');
+    function showError(el, message) {
+        el.textContent = message;
+        el.classList.remove('hidden');
+    }
 
-        const res = await fetch('/api/auth/login', {
+    async function postCredentials(url) {
+        return fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -57,14 +104,53 @@
                 password: document.getElementById('password').value,
             }),
         });
+    }
 
-        if (res.ok) {
-            window.location.href = '/';
-            return;
-        }
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) {
+        loginForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const errorEl = document.getElementById('login-error');
+            errorEl.classList.add('hidden');
 
-        errorEl.textContent = 'Invalid email or password.';
-        errorEl.classList.remove('hidden');
-    });
+            const res = await postCredentials('/api/auth/login');
+            if (res.ok) {
+                window.location.href = '/';
+                return;
+            }
+            showError(errorEl, 'Invalid email or password.');
+        });
+    }
+
+    const setupForm = document.getElementById('setup-form');
+    if (setupForm) {
+        setupForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const errorEl = document.getElementById('setup-error');
+            errorEl.classList.add('hidden');
+
+            const password = document.getElementById('password').value;
+            if (password !== document.getElementById('password-confirm').value) {
+                showError(errorEl, 'Passwords do not match.');
+                return;
+            }
+
+            const res = await postCredentials('/api/auth/setup');
+            if (res.ok) {
+                window.location.href = '/';
+                return;
+            }
+            if (res.status === 409) {
+                // Someone finished setup first: fall back to the normal login.
+                window.location.reload();
+                return;
+            }
+            if (res.status === 403) {
+                showError(errorEl, 'Setup is only available from the local network.');
+                return;
+            }
+            showError(errorEl, 'Could not create the account. Check the email and password.');
+        });
+    }
 </script>
 {% endblock %}

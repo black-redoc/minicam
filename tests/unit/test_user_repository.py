@@ -133,3 +133,42 @@ async def test_delete_cascades_to_sessions_permissions_and_wan_access(
     assert await session_repo.get("jti-1") is None
     assert await permission_repo.get(user.id, "cam1") is None
     assert await wan_access_repo.get(user.id) is None
+
+
+async def test_count_users_counts_every_account(
+    db_connection: aiosqlite.Connection,
+) -> None:
+    repo = SQLiteUserRepository(db_connection)
+    assert await repo.count_users() == 0
+    await repo.create("a@example.com", "hashed", is_admin=False)
+    await repo.create("b@example.com", "hashed", is_admin=True)
+    assert await repo.count_users() == 2
+
+
+async def test_create_first_admin_creates_admin_when_empty(
+    db_connection: aiosqlite.Connection,
+) -> None:
+    repo = SQLiteUserRepository(db_connection)
+    user = await repo.create_first_admin("owner@example.com", "hashed")
+    assert user is not None
+    assert user.email == "owner@example.com"
+    assert user.is_admin is True
+    assert user.is_active is True
+
+
+async def test_create_first_admin_returns_none_once_any_user_exists(
+    db_connection: aiosqlite.Connection,
+) -> None:
+    repo = SQLiteUserRepository(db_connection)
+    await repo.create("viewer@example.com", "hashed", is_admin=False)
+    assert await repo.create_first_admin("intruder@example.com", "hashed") is None
+    assert await repo.count_users() == 1
+
+
+async def test_create_first_admin_succeeds_only_once(
+    db_connection: aiosqlite.Connection,
+) -> None:
+    repo = SQLiteUserRepository(db_connection)
+    assert await repo.create_first_admin("first@example.com", "hashed") is not None
+    assert await repo.create_first_admin("second@example.com", "hashed") is None
+    assert [u.email for u in await repo.list_all()] == ["first@example.com"]

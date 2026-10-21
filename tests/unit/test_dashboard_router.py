@@ -13,6 +13,7 @@ from app.dependencies import (
     get_authorization_service,
     get_db_connection,
     get_optional_current_user,
+    get_user_repository,
     require_admin,
 )
 from app.models.config import AppConfig, CameraConfig
@@ -157,11 +158,33 @@ class TestHomeDashboardAuthenticated:
         assert 'href="/admin"' in res.text
 
 
+def _users(count: int) -> AsyncMock:
+    repository = AsyncMock()
+    repository.count_users.return_value = count
+    return repository
+
+
 class TestLoginPage:
     def test_returns_200(self, client: TestClient) -> None:
+        client.app.dependency_overrides[get_user_repository] = lambda: _users(1)
         res = client.get("/login")
         assert res.status_code == 200
         assert "text/html" in res.headers["content-type"]
+
+    def test_shows_only_login_form_once_a_user_exists(self, client: TestClient) -> None:
+        client.app.dependency_overrides[get_user_repository] = lambda: _users(1)
+        res = client.get("/login")
+        assert 'id="login-form"' in res.text
+        assert 'id="setup-form"' not in res.text
+
+    def test_shows_first_admin_form_when_no_user_exists(
+        self, client: TestClient
+    ) -> None:
+        client.app.dependency_overrides[get_user_repository] = lambda: _users(0)
+        res = client.get("/login")
+        assert 'id="setup-form"' in res.text
+        assert 'id="login-form"' not in res.text
+        assert "Create admin account" in res.text
 
 
 class TestAdminPage:

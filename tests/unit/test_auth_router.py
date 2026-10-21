@@ -485,3 +485,82 @@ class TestListPermissions:
             },
         ]
         permission_repository.list_for_user.assert_called_once_with(1)
+
+
+class TestSetupStatus:
+    @pytest.mark.parametrize(("count", "expected"), [(0, True), (1, False)])
+    def test_reports_whether_setup_is_required(
+        self, app: FastAPI, count: int, expected: bool
+    ) -> None:
+        user_repository = AsyncMock()
+        user_repository.count_users.return_value = count
+        app.dependency_overrides[get_user_repository] = lambda: user_repository
+        client = TestClient(app)
+
+        res = client.get("/api/auth/setup")
+        assert res.status_code == 200
+        assert res.json() == {"setup_required": expected}
+
+
+class TestCompleteSetup:
+    def _wire(self, app: FastAPI, created: User | None) -> AsyncMock:
+        user_repository = AsyncMock()
+        user_repository.create_first_admin.return_value = created
+        password_hasher = MagicMock()
+        password_hasher.hash.return_value = "hashed"
+        token_service = MagicMock()
+        token_service.issue.return_value = "signed-token"
+        app.dependency_overrides[get_user_repository] = lambda: user_repository
+        app.dependency_overrides[get_password_hasher] = lambda: password_hasher
+        app.dependency_overrides[get_session_repository] = lambda: AsyncMock()
+        app.dependency_overrides[get_token_service] = lambda: token_service
+        app.dependency_overrides[get_security_settings] = lambda: _SETTINGS
+        return user_repository
+
+    def test_creates_admin_and_sets_session_cookie(self, app: FastAPI) -> None:
+        user_repository = self._wire(app, _ADMIN)
+        client = TestClient(app)
+
+        res = client.post(
+            "/api/auth/setup",
+            json={"email": _ADMIN.email, "password": "long-enough"},
+        )
+        assert res.status_code == 201
+        assert res.json() == {"id": 2, "email": _ADMIN.email, "is_admin": True}
+        assert res.cookies.get("minicam_session") == "signed-token"
+        user_repository.create_first_admin.assert_awaited_once_with(
+            _ADMIN.email, "hashed"
+        )
+
+    def test_returns_409_when_a_user_already_exists(self, app: FastAPI) -> None:
+        self._wire(app, None)
+        client = TestClient(app)
+
+        res = client.post(
+            "/api/auth/setup",
+            json={"email": "late@example.com", "password": "long-enough"},
+        )
+        assert res.status_code == 409
+        assert "minicam_session" not in res.cookies
+
+    def test_returns_403_from_wan(self, app: FastAPI) -> None:
+        user_repository = self._wire(app, _ADMIN)
+        app.dependency_overrides[get_network_zone] = lambda: NetworkZone.WAN
+        client = TestClient(app)
+
+        res = client.post(
+            "/api/auth/setup",
+            json={"email": _ADMIN.email, "password": "long-enough"},
+        )
+        assert res.status_code == 403
+        user_repository.create_first_admin.assert_not_awaited()
+
+    def test_rejects_short_password(self, app: FastAPI) -> None:
+        user_repository = self._wire(app, _ADMIN)
+        client = TestClient(app)
+
+        res = client.post(
+            "/api/auth/setup", json={"email": _ADMIN.email, "password": "short"}
+        )
+        assert res.status_code == 422
+        user_repository.create_first_admin.assert_not_awaited()

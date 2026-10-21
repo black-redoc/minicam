@@ -11,6 +11,8 @@ Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unle
 | `GET` | `/admin` | admin | Admin page (user + permission management) |
 | `GET` | `/health` | none | App health status |
 | `POST` | `/api/auth/login` | none | Log in, set session cookie |
+| `GET` | `/api/auth/setup` | none | Whether first-run setup is pending |
+| `POST` | `/api/auth/setup` | none (LAN, only while no user exists) | Create the first admin and sign in |
 | `POST` | `/api/auth/logout` | session (optional) | Revoke session, clear cookie |
 | `GET` | `/api/auth/me` | session | Current user |
 | `POST` | `/api/auth/users` | admin | Create a user |
