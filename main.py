@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         buf = FrameBuffer()
         state.frame_buffers[cam.name] = buf
 
-        camera = RTSPCamera(rtsp_url=cam.rtsp_url, buffer=buf)
+        camera = RTSPCamera(rtsp_url=cam.rtsp_url, buffer=buf, name=cam.name)
         camera.start()
         state.cameras[cam.name] = camera
 

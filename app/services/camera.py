@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
-import time
 from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -23,7 +23,12 @@ _RTSP_OPTIONS: dict[str, str] = {
     "max_delay": "0",
     "reorder_queue_size": "0",
 }
-_RECONNECT_DELAY_SECONDS = 2.0
+# Reconnect backoff: 2s, 4s, 8s ... capped at 60s, each with +/-20% jitter so
+# several cameras behind one dead switch do not retry in lockstep. Reset once
+# a connection actually delivers a frame.
+_RECONNECT_BASE_DELAY_SECONDS = 2.0
+_RECONNECT_MAX_DELAY_SECONDS = 60.0
+_RECONNECT_JITTER = 0.2
 _STOP_TIMEOUT_SECONDS = 10.0
 _OPEN_TIMEOUT_SECONDS = 5.0
 _STALL_TIMEOUT_SECONDS = 15.0
@@ -35,6 +40,20 @@ _STALL_TIMEOUT_SECONDS = 15.0
 # unaffected and still runs fully in parallel; only the open/close sequence
 # is serialized here.
 _av_io_lock = threading.Lock()
+
+
+def reconnect_delay(attempt: int, rand: float) -> float:
+    """Backoff for the attempt-th consecutive failure (0-based).
+
+    Args:
+        attempt: Consecutive failed connections so far, starting at 0.
+        rand: A uniform sample in [0, 1) that drives the jitter.
+    """
+    base = min(
+        _RECONNECT_MAX_DELAY_SECONDS,
+        _RECONNECT_BASE_DELAY_SECONDS * 2.0 ** min(attempt, 16),
+    )
+    return base * (1 + _RECONNECT_JITTER * (2 * rand - 1))
 
 
 def redact_url(url: str) -> str:
@@ -60,9 +79,13 @@ class RTSPCamera:
     Args:
         rtsp_url: Full RTSP URL including credentials.
         buffer: The FrameBuffer to push frames into.
+        name: Camera name, used for the capture thread's name.
     """
 
-    def __init__(self, rtsp_url: str, buffer: FrameBuffer) -> None:
+    def __init__(
+        self, rtsp_url: str, buffer: FrameBuffer, name: str = "camera"
+    ) -> None:
+        self._name = name
         self._rtsp_url = rtsp_url
         # The full URL embeds camera credentials: only this redacted form
         # may ever reach a log line.
@@ -74,15 +97,20 @@ class RTSPCamera:
         self._container: av.container.InputContainer | None = None
         self._thread: threading.Thread | None = None
         self._container_lock = threading.Lock()
+        # Set by stop() so a backoff wait ends immediately instead of
+        # outliving the join timeout.
+        self._stop_event = threading.Event()
+        self._got_frame = False
 
     def start(self) -> None:
         """Start the RTSP capture loop in a background thread."""
         if self._running:
             return
         self._running = True
+        self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._capture_loop,
-            name="rtsp_camera",
+            name=f"rtsp:{self._name}",
             daemon=True,
         )
         self._thread.start()
@@ -90,6 +118,7 @@ class RTSPCamera:
     def stop(self) -> None:
         """Stop the capture loop and release all resources."""
         self._running = False
+        self._stop_event.set()
 
         self._close_container()
 
@@ -127,9 +156,12 @@ class RTSPCamera:
         or by returning normally (the demuxer simply stopped yielding packets
         — e.g. the camera closed the RTSP session on its own, no exception
         involved). Both are treated as a disconnect: logged and followed by
-        the same backoff delay, so reconnects are never silent or immediate.
+        an exponential backoff delay, so reconnects are never silent or
+        immediate. The backoff resets once a connection delivers a frame.
         """
+        attempt = 0
         while self._running:
+            self._got_frame = False
             try:
                 self._capture_stream()
             except Exception as exc:
@@ -149,13 +181,18 @@ class RTSPCamera:
                         self._log_url,
                     )
             self._connected = False
+            if self._got_frame:
+                attempt = 0
             if self._running:
+                delay = reconnect_delay(attempt, random.random())
+                attempt += 1
                 logger.warning(
-                    "Reconnecting to %s in %.1fs",
+                    "Reconnecting to %s in %.1fs (attempt %d)",
                     self._log_url,
-                    _RECONNECT_DELAY_SECONDS,
+                    delay,
+                    attempt,
                 )
-                time.sleep(_RECONNECT_DELAY_SECONDS)
+                self._stop_event.wait(delay)
 
     def _capture_stream(self) -> None:
         """Open the RTSP stream and decode frames until disconnection."""
@@ -195,6 +232,7 @@ class RTSPCamera:
                     )
                     self._sequence += 1
                     self._buffer.write(frame)
+                    self._got_frame = True
         finally:
             self._close_container()
             self._connected = False

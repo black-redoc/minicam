@@ -149,7 +149,7 @@ def _start_camera_and_ptz(cam_config: CameraConfig) -> None:
         buf = FrameBuffer()
         state.frame_buffers[cam_config.name] = buf
 
-    camera = RTSPCamera(rtsp_url=cam_config.rtsp_url, buffer=buf)
+    camera = RTSPCamera(rtsp_url=cam_config.rtsp_url, buffer=buf, name=cam_config.name)
     camera.start()
     state.cameras[cam_config.name] = camera
 

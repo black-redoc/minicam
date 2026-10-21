@@ -37,7 +37,7 @@ Every request that touches a camera (viewing it on the dashboard, opening its We
 ## Main Components
 
 ### RTSPCamera (`app/services/camera.py`)
-Reads an RTSP stream using `PyAV`, decodes frames to raw RGB24 numpy arrays (`app/services/decoder.py`), and writes them into a `FrameBuffer`. Runs on a background daemon thread. JPEG encoding is *not* done here — it happens on demand, once per frame per camera, shared by all of that camera's viewers (see [Video Streaming](/doc/stream)).
+Reads an RTSP stream using `PyAV`, decodes frames to raw RGB24 numpy arrays (`app/services/decoder.py`), and writes them into a `FrameBuffer`. Runs on a background daemon thread named `rtsp:<camera name>`. When the stream drops it reconnects with exponential backoff (2 s, 4 s, 8 s … capped at 60 s, ±20 % jitter), and the delay resets once a connection delivers a frame. JPEG encoding is *not* done here — it happens on demand, once per frame per camera, shared by all of that camera's viewers (see [Video Streaming](/doc/stream)).
 
 ### PTZService (`app/services/ptz.py`)
 Wraps the `onvif-zeep` library. Connects lazily on first PTZ command. Sends `ContinuousMove` SOAP requests (speed 0.5). Supports `up`, `down`, `left`, `right`, and `stop`.
