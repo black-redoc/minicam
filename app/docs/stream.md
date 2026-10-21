@@ -29,8 +29,8 @@ The `token` query parameter must be the value returned by step 1, issued for thi
 
 ## Behavior
 
-- The server polls the `DoubleFrameBuffer` at **60 Hz**.
-- A frame is only sent when it has changed since the last send (no duplicate frames).
+- Each handler waits on the camera's `FrameBuffer` and is woken as soon as a new frame arrives (no polling).
+- A frame is only sent once per viewer (no duplicate frames). A viewer slower than the camera skips the frames it missed and always gets the latest one.
 - The connection is closed immediately with WebSocket close code **1008** (Policy Violation) if: the token is missing, malformed, expired, was issued for a different camera, or the requested camera is not registered.
 - The connection stays open indefinitely as long as the camera is running. If the camera thread crashes, the WebSocket will stop delivering frames but the connection remains open.
 - Since the token is only checked at handshake time, a client whose token expires mid-stream is **not** disconnected — the socket keeps delivering frames.
@@ -83,10 +83,12 @@ This is exactly the pattern implemented by `VideoStream` in `app/static/js/strea
 |-----------|-------|
 | Poll rate | 60 Hz |
 | Frame format | JPEG (quality set in encoder) |
-| Latency | ~1–3 frames (double buffer + WebSocket queue) |
+| Latency | ~1–2 frames (latest-frame buffer + WebSocket queue) |
 | Protocol | Binary WebSocket over HTTP/1.1 upgrade |
 | Stream token TTL | 30s by default (`MINICAM_STREAM_TOKEN_TTL_SECONDS`) |
 
 ## Multiple Viewers
 
-Multiple browser tabs can connect to the same `WS /ws/stream/{camera_name}` simultaneously, each with its own stream token. Each WebSocket handler reads independently from the `DoubleFrameBuffer` — RTSP demuxing/decoding is shared and does not cost extra CPU per viewer. JPEG encoding, however, is **not** shared: each connected WebSocket encodes its own copy of every new frame via `encode_jpeg` (`app/services/encoder.py`), so CPU cost for encoding scales with the number of active viewers.
+Multiple browser tabs can connect to the same `WS /ws/stream/{camera_name}` simultaneously, each with its own stream token. RTSP demuxing/decoding and JPEG encoding are both shared: each frame is decoded once and encoded once per camera (`SharedJpegEncoder`, `app/services/shared_encoder.py`), with detection boxes drawn in that same single pass, and the resulting bytes are sent to every viewer. Extra viewers only add the cost of sending the bytes.
+
+The dashboard closes a camera's WebSocket while its browser tab is hidden and reopens it when the tab becomes visible again, so background tabs use no server CPU or bandwidth.

@@ -1,6 +1,10 @@
 /**
  * VideoStream — manages a WebSocket connection that receives binary JPEG
  * frames and renders them to an <img> element.
+ *
+ * While the page is hidden (background tab, minimized window) the socket is
+ * closed and reopened on return, so hidden tabs cost the server no encode
+ * work and no bandwidth through the tunnel.
  */
 /* exported VideoStream */
 class VideoStream {
@@ -16,6 +20,14 @@ class VideoStream {
     #fpsTimestamp = 0
     #reconnectTimer = null
     #reconnectDelay = 3000
+    // True between connect()/switchCamera() and disconnect().
+    #active = false
+    // True while closed only because the page is hidden.
+    #paused = false
+    // Bumped by every connect/pause/disconnect, so a connect() still
+    // awaiting its token can tell it has been superseded.
+    #connectSeq = 0
+    #onVisibilityChange = () => this.#handleVisibilityChange()
 
     /**
      * @param {object} opts
@@ -34,18 +46,26 @@ class VideoStream {
     }
 
     async connect() {
-        if (this.#ws) {
-            this.#ws.onclose = null;
-            this.#ws.close();
-            this.#ws = null;
+        if (!this.#active) {
+            this.#active = true;
+            document.addEventListener('visibilitychange', this.#onVisibilityChange);
         }
+        clearTimeout(this.#reconnectTimer);
+        this.#closeSocket();
+        const seq = ++this.#connectSeq;
 
+        if (document.hidden) {
+            this.#pause();
+            return;
+        }
+        this.#paused = false;
         this.#setStatus('connecting', 'Connecting…');
 
         let token;
         try {
             token = await this.#fetchStreamToken();
         } catch {
+            if (seq !== this.#connectSeq) return;
             // No session, no permission on this camera, or WAN access gate
             // closed — same recovery path as a dropped socket: back off
             // and retry, so it self-heals once the caller logs in / is
@@ -55,6 +75,7 @@ class VideoStream {
             this.#reconnectTimer = setTimeout(() => this.connect(), this.#reconnectDelay);
             return;
         }
+        if (seq !== this.#connectSeq) return;
 
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const url   = `${proto}//${location.host}/ws/stream/`
@@ -88,12 +109,12 @@ class VideoStream {
     }
 
     disconnect() {
+        this.#active = false;
+        this.#paused = false;
+        this.#connectSeq++;
+        document.removeEventListener('visibilitychange', this.#onVisibilityChange);
         clearTimeout(this.#reconnectTimer);
-        if (this.#ws) {
-            this.#ws.onclose = null;
-            this.#ws.close();
-            this.#ws = null;
-        }
+        this.#closeSocket();
     }
 
     /**
@@ -107,15 +128,35 @@ class VideoStream {
         clearTimeout(this.#reconnectTimer);
         this.#overlay.classList.remove('hidden');
         this.#cameraName = name;
+        this.connect();
+    }
+
+    // ── Private ──────────────────────────────────────────────
+
+    #handleVisibilityChange() {
+        if (document.hidden) {
+            this.#pause();
+        } else if (this.#active && this.#paused) {
+            this.connect();
+        }
+    }
+
+    #pause() {
+        clearTimeout(this.#reconnectTimer);
+        this.#connectSeq++;
+        this.#closeSocket();
+        this.#paused = true;
+        this.#setStatus('disconnected', 'Paused');
+    }
+
+    /** Close the socket without triggering the auto-reconnect in #onClose. */
+    #closeSocket() {
         if (this.#ws) {
             this.#ws.onclose = null;
             this.#ws.close();
             this.#ws = null;
         }
-        this.connect();
     }
-
-    // ── Private ──────────────────────────────────────────────
 
     #onOpen() {
         this.#setStatus('connected', 'Connected');

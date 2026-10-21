@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from app.services.detection.base import Detection
 
 if TYPE_CHECKING:
-    from app.buffers.double_frame_buffer import DoubleFrameBuffer
+    from app.buffers.frame_buffer import FrameBuffer
     from app.services.detection.base import DetectionBackend
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ class DetectionWorker:
     def __init__(
         self,
         camera_name: str,
-        buffer: DoubleFrameBuffer,
+        buffer: FrameBuffer,
         backend: DetectionBackend,
         allowed_classes: frozenset[str],
         interval_seconds: float,

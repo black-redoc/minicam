@@ -11,6 +11,7 @@ import aiosqlite
 from fastapi.testclient import TestClient
 
 import app.state as state_module
+from app.buffers.frame_buffer import FrameBuffer
 from app.repositories.permission_repository import SQLitePermissionRepository
 from app.repositories.user_repository import SQLiteUserRepository
 from app.services.auth import PasswordHasher
@@ -58,9 +59,7 @@ async def test_issue_token_denied_for_camera_without_permission(
 async def test_valid_token_opens_the_websocket(
     client: TestClient, db_connection: aiosqlite.Connection
 ) -> None:
-    mock_buffer = MagicMock()
-    mock_buffer.read.return_value = None
-    state_module.frame_buffers["cam1"] = mock_buffer
+    state_module.frame_buffers["cam1"] = FrameBuffer()
     try:
         await _login_viewer(client, db_connection, "streamer@example.com")
         token = client.post("/api/stream/cam1/token").json()["token"]

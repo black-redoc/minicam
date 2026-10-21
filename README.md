@@ -21,6 +21,18 @@ Sign up and log in at https://fastapicloud.com, then deploy with:
 uv run fastapi deploy
 ```
 
+## Checks
+
+CI (`.github/workflows/ci.yml`) runs on every push to `master` and every pull
+request. To run the same checks locally:
+
+```bash
+uv run ruff check . && uv run ruff format --check .
+uv run mypy app main.py
+uv run pytest
+npm ci --ignore-scripts && npm run lint && npm run typecheck
+```
+
 ## Project Structure
 
 - `main.py` - Your FastAPI application

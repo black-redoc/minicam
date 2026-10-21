@@ -54,7 +54,7 @@ Send a `PUT` to `/api/cameras/{name}` with the updated fields (same body schema 
 
 After a successful edit:
 1. The old `RTSPCamera` thread is stopped.
-2. Its `DoubleFrameBuffer` is shut down.
+2. Its `FrameBuffer` is shut down.
 3. New instances are created and started with the updated config.
 4. `config.toml` is rewritten on disk.
 

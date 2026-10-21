@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app import state
-from app.buffers.double_frame_buffer import DoubleFrameBuffer
+from app.buffers.frame_buffer import FrameBuffer
 from app.db.connection import close_db, init_db
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.routers import auth as auth_router
@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await init_db(security_settings.db_path)
 
     for cam in config.cameras:
-        buf = DoubleFrameBuffer()
+        buf = FrameBuffer()
         state.frame_buffers[cam.name] = buf
 
         camera = RTSPCamera(rtsp_url=cam.rtsp_url, buffer=buf)

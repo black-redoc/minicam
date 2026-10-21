@@ -3,10 +3,10 @@
 Pillow and OpenCV are deliberately not used here. app/services/encoder.py
 already documents that Pillow was ruled out for the encoding path because
 of the latency of a numpy -> PIL.Image -> numpy round-trip; drawing runs
-in that exact same per-viewer, per-frame hot path (right before
-encode_jpeg), so the same constraint applies. Box borders are instead
-drawn by assigning pixel values directly via numpy slicing on the four
-edge strips of each rectangle — no new dependency, no format conversion.
+in that exact same per-frame hot path (right before encode_jpeg), so the
+same constraint applies. Box borders are instead drawn by assigning pixel
+values directly via numpy slicing on the four edge strips of each
+rectangle — no new dependency, no format conversion.
 
 Text labels are out of scope for this phase (see the detection plan):
 there is no cheap way to rasterize text without Pillow/OpenCV, so the
