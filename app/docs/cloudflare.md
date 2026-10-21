@@ -1,6 +1,104 @@
 # Cloudflare Access & Tunnel
 
-minicam is reachable from outside the local network without opening a port or having a public IP. This page covers how that path is wired end-to-end: `cloudflared`, Cloudflare Access, and the two environment variables (`MINICAM_TRUSTED_PROXIES`, `MINICAM_CF_ACCESS_TEAM_DOMAIN`, `MINICAM_CF_ACCESS_AUD`) that make FastAPI aware of it. See also [Authentication & Authorization](/doc/auth#wan-access-gate) for the `wan_access` grant this layer sits alongside, and [Configuration](/doc/configuration#security-settings) for the full environment variable reference.
+minicam is reachable from outside the local network without opening a port or having a public IP. This page covers how that path is wired end-to-end: `cloudflared`, Cloudflare Access, and the three environment variables (`MINICAM_TRUSTED_PROXIES`, `MINICAM_CF_ACCESS_TEAM_DOMAIN`, `MINICAM_CF_ACCESS_AUD`) that make FastAPI aware of it. See also [Authentication & Authorization](/doc/auth#wan-access-gate) for the `wan_access` grant this layer sits alongside, and [Configuration](/doc/configuration#security-settings) for the full environment variable reference.
+
+## Setup, step by step
+
+Prerequisites: a domain whose DNS is managed by Cloudflare, a Cloudflare Zero Trust organization (its team name gives you `https://<team>.cloudflareaccess.com`), and minicam already running under systemd with a valid `.env` (see [Configuration](/doc/configuration#initial-setup-creating-minicam_jwt_secret)).
+
+### 1. Install `cloudflared` on the Pi
+
+From Cloudflare's signed apt repository (Debian / Raspberry Pi OS, `arm64` and `amd64`):
+
+```bash
+sudo mkdir -p --mode=0755 /usr/share/keyrings
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+  | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' \
+  | sudo tee /etc/apt/sources.list.d/cloudflared.list
+sudo apt-get update && sudo apt-get install cloudflared
+```
+
+### 2. Create the tunnel
+
+1. Zero Trust dashboard -> **Networks -> Tunnels -> Create a tunnel** -> type **Cloudflared**, name it (e.g. `minicam-<site>`).
+2. The dashboard shows an install command with a token. Run it on the Pi:
+
+   ```bash
+   sudo cloudflared service install <TOKEN>
+   ```
+
+   The token is a credential for this tunnel: don't commit it, paste it in chats, or put it in `.env`. If it leaks, rotate it from the tunnel's page and re-run the command.
+3. Confirm the connector is healthy (the dashboard should show the tunnel as **Healthy**):
+
+   ```bash
+   systemctl status cloudflared.service
+   journalctl -u cloudflared -n 50
+   ```
+
+### 3. Route a hostname to minicam
+
+In the tunnel -> **Public Hostname -> Add a public hostname**:
+
+| Field | Value |
+|---|---|
+| Subdomain / Domain | e.g. `cam` . `example.com` |
+| Service type | `HTTP` |
+| URL | `127.0.0.1:8080` |
+
+Use **`127.0.0.1`**, not `localhost`. `MINICAM_TRUSTED_PROXIES` matches the exact client IP string, so if `cloudflared` reached the app over IPv6 (`::1`) its requests would not match the trusted proxy and — being loopback — would be classified as **LAN**, skipping the WAN gate and the Access JWT check (see [`MINICAM_TRUSTED_PROXIES`](#minicam_trusted_proxies) below). WebSockets (used by the video stream) work through the tunnel with no extra setting.
+
+### 4. Protect the hostname with Cloudflare Access
+
+1. **Access -> Applications -> Add an application -> Self-hosted**. Application domain: the exact hostname from step 3.
+2. Add a policy with action **Allow** and an **Include -> Emails** rule listing every person who should reach minicam from outside. Each email should be the same one that person uses to log in to minicam — FastAPI rejects mismatches.
+3. Save, then open the application's **Overview** and copy the **Application Audience (AUD) Tag**.
+
+Do this *before* sharing the hostname: until the Access application exists, the tunnel serves minicam's login page publicly.
+
+### 5. Configure minicam
+
+In `.env`:
+
+```bash
+MINICAM_TRUSTED_PROXIES=127.0.0.1
+MINICAM_CF_ACCESS_TEAM_DOMAIN=https://<team>.cloudflareaccess.com
+MINICAM_CF_ACCESS_AUD=<AUD tag from step 4>
+```
+
+Then `sudo systemctl restart minicam.service`.
+
+### 6. Grant `wan_access` to each remote user
+
+There is no admin UI or CLI for this yet (see [Authentication & Authorization](/doc/auth#wan-access-gate)), so set it in the database (`MINICAM_DB_PATH`) — the statement is idempotent:
+
+```bash
+sqlite3 /path/to/minicam.db "INSERT INTO wan_access (user_id, is_active) \
+  SELECT id, 1 FROM users WHERE email = 'user@example.com' \
+  ON CONFLICT(user_id) DO UPDATE SET is_active = 1, \
+  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');"
+```
+
+Use `is_active = 0` (in both places) to revoke it.
+
+### 7. Verify
+
+```bash
+# Unauthenticated requests must be stopped by Access (302 to the Access login):
+curl -sI https://cam.example.com | head -3
+# The JWKS minicam uses to verify Access JWTs must be reachable from the Pi:
+curl -s https://<team>.cloudflareaccess.com/cdn-cgi/access/certs | head -c 200
+```
+
+Then, from a phone off Wi-Fi: open the hostname, pass the Access login, log in to minicam, and open a camera.
+
+| Symptom | Likely cause |
+|---|---|
+| Cloudflare error `502` / `1033` | minicam not running, or the service URL isn't `127.0.0.1:8080` |
+| Page loads without an Access login | Access application missing or its domain doesn't match the hostname |
+| `403` on every WAN request | `MINICAM_CF_ACCESS_AUD` / `MINICAM_CF_ACCESS_TEAM_DOMAIN` wrong or unset, or the Access email differs from the minicam account's email |
+| `403` "WAN access is not enabled for this account" | step 6 not done for that user |
+| Remote users skip the WAN gate (only if the app also listens on IPv6) | the tunnel targets `localhost`/`::1` instead of `127.0.0.1` |
 
 ## The Tunnel
 
