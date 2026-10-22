@@ -60,3 +60,23 @@ async def test_list_for_user_empty_when_no_permissions(
     user_id = await _make_user(db_connection)
     repo = SQLitePermissionRepository(db_connection)
     assert await repo.list_for_user(user_id) == []
+
+
+async def test_list_viewer_ids_returns_active_viewers_only(
+    db_connection: aiosqlite.Connection,
+) -> None:
+    user_repo = SQLiteUserRepository(db_connection)
+    viewer = await user_repo.create("viewer@example.com", "h", is_admin=False)
+    ptz_only = await user_repo.create("ptz@example.com", "h", is_admin=False)
+    inactive = await user_repo.create("inactive@example.com", "h", is_admin=False)
+    await db_connection.execute(
+        "UPDATE users SET is_active = 0 WHERE id = ?", (inactive.id,)
+    )
+    repo = SQLitePermissionRepository(db_connection)
+    await repo.upsert(viewer.id, "cam1", can_view=True, can_use_ptz=False)
+    await repo.upsert(ptz_only.id, "cam1", can_view=False, can_use_ptz=True)
+    await repo.upsert(inactive.id, "cam1", can_view=True, can_use_ptz=False)
+    await repo.upsert(viewer.id, "cam2", can_view=True, can_use_ptz=False)
+
+    assert await repo.list_viewer_ids("cam1") == [viewer.id]
+    assert await repo.list_viewer_ids("missing") == []

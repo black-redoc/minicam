@@ -18,6 +18,8 @@ class PermissionRepository(Protocol):
         self, user_id: int, camera_name: str, can_view: bool, can_use_ptz: bool
     ) -> CameraPermission: ...
 
+    async def list_viewer_ids(self, camera_name: str) -> list[int]: ...
+
 
 def _row_to_permission(row: aiosqlite.Row) -> CameraPermission:
     return CameraPermission(
@@ -67,3 +69,17 @@ class SQLitePermissionRepository:
         await self._conn.commit()
         assert row is not None
         return _row_to_permission(row)
+
+    async def list_viewer_ids(self, camera_name: str) -> list[int]:
+        """Return the ids of active users allowed to view camera_name."""
+        cursor = await self._conn.execute(
+            """
+            SELECT p.user_id FROM camera_permissions p
+            JOIN users u ON u.id = p.user_id
+            WHERE p.camera_name = ? AND p.can_view = 1 AND u.is_active = 1
+            ORDER BY p.user_id
+            """,
+            (camera_name,),
+        )
+        rows = await cursor.fetchall()
+        return [int(row["user_id"]) for row in rows]

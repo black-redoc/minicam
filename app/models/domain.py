@@ -46,3 +46,13 @@ class WanAccess:
     user_id: int
     is_active: bool
     updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class PushSubscription:
+    id: int
+    user_id: int
+    endpoint: str
+    p256dh: str
+    auth: str
+    created_at: str

@@ -32,10 +32,17 @@ Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unle
 | `PUT` | `/api/cameras/{name}` | admin | Edit camera |
 | `DELETE` | `/api/cameras/{name}` | admin | Remove camera |
 | `GET` | `/api/setup/discover` | admin | Discover cameras on LAN |
+| `GET` | `/api/notifications/settings` | admin | Global detection notification settings |
+| `PUT` | `/api/notifications/settings` | admin | Save global detection notification settings |
+| `GET` | `/api/notifications/events` | session + WAN gate | SSE feed of detections on viewable cameras |
+| `GET` | `/api/notifications/push/public-key` | session | VAPID public key for Web Push |
+| `POST` | `/api/notifications/push/subscriptions` | session + WAN gate | Register a Web Push subscription |
+| `DELETE` | `/api/notifications/push/subscriptions` | session | Unregister a Web Push subscription |
+| `GET` | `/service-worker.js` | none | Service worker that displays Web Push notifications |
 | `GET` | `/doc/` | none | Documentation index |
 | `GET` | `/doc/{topic}` | none | Documentation topic |
 
-See [Authentication & Authorization](/doc/auth) for the full `/api/auth/*` reference (request/response bodies, error codes). This page focuses on the camera-facing endpoints.
+See [Authentication & Authorization](/doc/auth) for the full `/api/auth/*` reference (request/response bodies, error codes). This page focuses on the camera-facing endpoints. The notification endpoints are described in [Detection Notifications](/doc/notifications).
 
 ---
 

@@ -138,6 +138,23 @@
                 </a>
                 {% endif %}
 
+                <button id="push-toggle-btn"
+                        type="button"
+                        role="menuitem"
+                        aria-pressed="false"
+                        class="flex items-center gap-2 w-full px-3 py-2 text-sm text-left text-slate-300
+                               hover:bg-slate-700/60 hover:text-slate-100
+                               focus:bg-slate-700/60 focus:outline-none transition-colors
+                               disabled:opacity-50 disabled:cursor-not-allowed">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round" class="w-4 h-4 pointer-events-none shrink-0">
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                    </svg>
+                    <span data-push-label>Notifications on this device</span>
+                </button>
+
                 <button id="config-btn"
                         type="button"
                         role="menuitem"
@@ -317,6 +334,10 @@
 
 </main>
 
+<!-- Detection notification toasts (app/static/js/notifications.js) -->
+<div id="notification-toasts" aria-live="polite"
+     class="fixed bottom-4 right-4 z-40 flex flex-col gap-2 items-end pointer-events-none"></div>
+
 <!-- ═══════════════════════════════════════════════════════════
      Config Modal
      ConfigWidget renders all inner content dynamically.
@@ -343,6 +364,7 @@
 <script src="{{ url_for('static', path='js/grid.js') }}"></script>
 <script src="{{ url_for('static', path='js/view-cycle.js') }}"></script>
 <script src="{{ url_for('static', path='js/navmenu.js') }}"></script>
+<script src="{{ url_for('static', path='js/notifications.js') }}"></script>
 <script>
     const INITIAL_CAMERA = "{{ active_camera }}";
 
@@ -378,6 +400,11 @@
     });
 
     document.getElementById('config-btn').addEventListener('click', () => configWidget.open());
+
+    new DetectionNotifications(
+        document.getElementById('notification-toasts'),
+        document.getElementById('push-toggle-btn'),
+    ).start();
 
     initNavMenu(
         document.getElementById('nav-menu-btn'),

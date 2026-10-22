@@ -27,7 +27,14 @@ async def test_apply_migrations_creates_expected_tables(
     )
     rows = await cursor.fetchall()
     table_names = {row["name"] for row in rows}
-    assert {"users", "sessions", "camera_permissions", "wan_access"} <= table_names
+    assert {
+        "users",
+        "sessions",
+        "camera_permissions",
+        "wan_access",
+        "web_push_subscriptions",
+        "vapid_keys",
+    } <= table_names
 
 
 async def test_apply_migrations_is_idempotent(
@@ -100,7 +107,7 @@ class TestVersionedMigrations:
     async def test_records_each_applied_version(
         self, db_connection: aiosqlite.Connection
     ) -> None:
-        assert await _versions(db_connection) == ["0001_initial"]
+        assert await _versions(db_connection) == ["0001_initial", "0002_web_push"]
 
     async def test_applies_pending_migrations_in_name_order(
         self, migrations_dir: Path
@@ -164,7 +171,7 @@ class TestVersionedMigrations:
         conn = await aiosqlite.connect(db_path)
         try:
             await apply_migrations(conn)
-            assert await _versions(conn) == ["0001_initial"]
+            assert await _versions(conn) == ["0001_initial", "0002_web_push"]
             cursor = await conn.execute("SELECT email FROM users")
             assert [row[0] for row in await cursor.fetchall()] == ["a@b.c"]
         finally:

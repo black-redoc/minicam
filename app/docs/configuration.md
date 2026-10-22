@@ -53,8 +53,19 @@ Each `[[cameras]]` block defines one IP camera. You may add as many as needed.
 | `password` | string | no | `""` | Camera login password |
 | `channel` | integer | no | `1` | Channel number (1 for single-channel cameras) |
 | `stream` | string | no | `"main"` | `"main"` for HD stream, `"sub"` for sub-stream |
+| `detection_classes` | list of strings | no | `[]` | Object classes to detect and box. See [Object Detection](/doc/detection) |
+| `notifications` | string | no | `"inherit"` | `"inherit"` follows `[notifications] enabled`; `"on"`/`"off"` override it for this camera. See [Detection Notifications](/doc/notifications) |
 
 Only `name` and `host` are truly required — every other field falls back to its default if omitted from `config.toml`.
+
+## `[notifications]` section
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `false` | Notify on detections for every camera whose `notifications` is `"inherit"` |
+| `cooldown_seconds` | integer | `60` | Minimum time between two notifications from the same camera (1–86400) |
+
+Edited from the Admin page. See [Detection Notifications](/doc/notifications).
 
 ## RTSP URL Construction
 
@@ -91,6 +102,7 @@ Unlike camera config, the security layer (sessions, stream tokens, WAN access) i
 | `MINICAM_TRUSTED_PROXIES` | no | `""` (empty) | Comma-separated list of proxy IPs. Requests arriving through one of these are always classified as WAN — see [Authentication & Authorization](/doc/auth). |
 | `MINICAM_CF_ACCESS_TEAM_DOMAIN` | required for WAN | — | Cloudflare Access team domain, used to fetch the JWKS that verifies the `Cf-Access-Jwt-Assertion` header on WAN requests. |
 | `MINICAM_CF_ACCESS_AUD` | required for WAN | — | Audience (AUD) tag of the Cloudflare Access application protecting this tunnel hostname. |
+| `MINICAM_VAPID_SUBJECT` | no | `mailto:minicam@example.com` | VAPID contact (`mailto:` or `https:` URL) sent with every Web Push. Set your own address. See [Detection Notifications](/doc/notifications). |
 | `MINICAM_MODEL_CATALOG_URL` | no | latest [minicam-models](https://github.com/black-redoc/minicam-models) release `manifest.json` | Manifest the AI Detection model catalog lists and installs from. Point it at a tagged release to pin model versions. See [Object Detection](/doc/detection). |
 
 ## Initial Setup: Creating `MINICAM_JWT_SECRET`

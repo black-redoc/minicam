@@ -47,6 +47,7 @@ from app.services.model_catalog import (
     catalog_url,
     parse_manifest,
 )
+from app.services.notifications import runtime as notification_runtime
 from app.services.ptz import PTZConfig, PTZService
 from app.settings import get_config
 
@@ -75,6 +76,7 @@ def _to_response(cam: CameraConfig) -> CameraConfigResponse:
         channel=cam.channel,
         stream=cam.stream,
         detection_classes=cam.detection_classes,
+        notifications=cam.notifications,
     )
 
 
@@ -147,9 +149,7 @@ def _start_detection(cam_config: CameraConfig) -> None:
         backend=backend,
         allowed_classes=frozenset(cam_config.detection_classes),
         interval_seconds=1 / get_config().detection.inference_fps,
-        on_result=lambda snap: state.detection_results.__setitem__(
-            cam_config.name, snap
-        ),
+        on_result=notification_runtime.detection_result_handler(cam_config.name),
     )
     state.detection_workers[cam_config.name] = asyncio.create_task(worker.run())
 
@@ -229,6 +229,7 @@ async def edit_camera(name: str, body: CameraConfigRequest) -> CameraConfigRespo
     await _stop_ptz(name)
     await _stop_detection(name)
     if name != cam_config.name:
+        notification_runtime.notifier.forget(name)
         old_buf = state.frame_buffers.pop(name, None)
         if old_buf is not None:
             old_buf.shutdown()
@@ -248,6 +249,7 @@ async def delete_camera(name: str) -> dict[str, str]:
     await _stop_camera(name)
     await _stop_ptz(name)
     await _stop_detection(name)
+    notification_runtime.notifier.forget(name)
     buf = state.frame_buffers.get(name)
     if buf is not None:
         buf.shutdown()

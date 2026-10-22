@@ -16,6 +16,10 @@ from app.repositories.permission_repository import (
     PermissionRepository,
     SQLitePermissionRepository,
 )
+from app.repositories.push_subscription_repository import (
+    PushSubscriptionRepository,
+    SQLitePushSubscriptionRepository,
+)
 from app.repositories.session_repository import (
     SessionRepository,
     SQLiteSessionRepository,
@@ -68,6 +72,12 @@ def get_wan_access_repository(
     conn: aiosqlite.Connection = Depends(get_db_connection),
 ) -> WanAccessRepository:
     return SQLiteWanAccessRepository(conn)
+
+
+def get_push_subscription_repository(
+    conn: aiosqlite.Connection = Depends(get_db_connection),
+) -> PushSubscriptionRepository:
+    return SQLitePushSubscriptionRepository(conn)
 
 
 def get_password_hasher() -> PasswordHasher:

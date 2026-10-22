@@ -1,5 +1,4 @@
 import asyncio
-import functools
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -15,6 +14,7 @@ from app.routers import auth as auth_router
 from app.routers import dashboard
 from app.routers import docs as docs_router
 from app.routers import health as health_router
+from app.routers import notifications as notifications_router
 from app.routers import ptz as ptz_router
 from app.routers import setup as setup_router
 from app.routers import stream as stream_router
@@ -22,6 +22,7 @@ from app.security_settings import get_security_settings
 from app.services.camera import RTSPCamera
 from app.services.detection.factory import get_detection_backend
 from app.services.detection.worker import DetectionWorker
+from app.services.notifications import runtime as notification_runtime
 from app.services.ptz import PTZConfig, PTZService
 from app.settings import get_config
 
@@ -38,7 +39,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     config = get_config()
     security_settings = get_security_settings()
-    await init_db(security_settings.db_path)
+    conn = await init_db(security_settings.db_path)
+    await notification_runtime.start_web_push(conn)
 
     for cam in config.cameras:
         buf = FrameBuffer()
@@ -74,9 +76,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                     backend=backend,
                     allowed_classes=frozenset(cam.detection_classes),
                     interval_seconds=1 / config.detection.inference_fps,
-                    on_result=functools.partial(
-                        state.detection_results.__setitem__, cam.name
-                    ),
+                    on_result=notification_runtime.detection_result_handler(cam.name),
                 )
                 state.detection_workers[cam.name] = asyncio.create_task(worker.run())
 
@@ -92,6 +92,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     for _name, ptz in state.ptz_services.items():
         if ptz.is_connected():
             ptz.disconnect()
+    await notification_runtime.shutdown()
     await close_db()
     logger.info("Services shut down")
 
@@ -114,3 +115,4 @@ app.include_router(ptz_router.router)
 app.include_router(setup_router.router)
 app.include_router(docs_router.router)
 app.include_router(health_router.router)
+app.include_router(notifications_router.router)

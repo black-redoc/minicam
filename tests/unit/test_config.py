@@ -283,3 +283,29 @@ class TestGetConfig:
         get_config.cache_clear()
         result2 = get_config(str(path))
         assert result1 is not result2
+
+
+class TestNotificationConfig:
+    def test_defaults_are_off_with_60s_cooldown(self) -> None:
+        config = AppConfig()
+        assert config.notifications.enabled is False
+        assert config.notifications.cooldown_seconds == 60
+        assert CameraConfig(name="c", host="h").notifications == "inherit"
+
+    def test_rejects_unknown_camera_mode(self) -> None:
+        with pytest.raises(ValidationError):
+            CameraConfig(name="c", host="h", notifications="maybe")  # type: ignore[arg-type]
+
+    def test_get_config_loads_notifications_section(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        _write_toml(
+            path,
+            {
+                "cameras": [{"name": "c", "host": "h", "notifications": "off"}],
+                "notifications": {"enabled": True, "cooldown_seconds": 90},
+            },
+        )
+        result = get_config(str(path))
+        assert result.notifications.enabled is True
+        assert result.notifications.cooldown_seconds == 90
+        assert result.cameras[0].notifications == "off"

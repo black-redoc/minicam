@@ -9,7 +9,12 @@ from pathlib import Path
 
 import tomli_w
 
-from app.models.config import AppConfig, CameraConfig, DetectionConfig
+from app.models.config import (
+    AppConfig,
+    CameraConfig,
+    DetectionConfig,
+    NotificationConfig,
+)
 
 _CONFIG_PATH: Path = Path(__file__).resolve().parent.parent.parent / "config.toml"
 
@@ -25,8 +30,14 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
     app_section = data.get("app", {})
     cameras = data.get("cameras", [])
     detection_section = data.get("detection", {})
+    notifications_section = data.get("notifications", {})
     return AppConfig.model_validate(
-        {**app_section, "cameras": cameras, "detection": detection_section}
+        {
+            **app_section,
+            "cameras": cameras,
+            "detection": detection_section,
+            "notifications": notifications_section,
+        }
     )
 
 
@@ -48,6 +59,7 @@ def save_config(config: AppConfig, path: Path = _CONFIG_PATH) -> None:
         },
         "cameras": cameras,
         "detection": config.detection.model_dump(),
+        "notifications": config.notifications.model_dump(),
     }
     data = tomli_w.dumps(doc).encode()
     fd, tmp_name = tempfile.mkstemp(
@@ -105,5 +117,15 @@ def update_detection_config(
     """Replace the detection config section and persist it."""
     config = load_config(path)
     config.detection = detection
+    save_config(config, path)
+    return config
+
+
+def update_notification_config(
+    notifications: NotificationConfig, path: Path = _CONFIG_PATH
+) -> AppConfig:
+    """Replace the notifications config section and persist it."""
+    config = load_config(path)
+    config.notifications = notifications
     save_config(config, path)
     return config

@@ -9,7 +9,12 @@ import pytest
 import tomli_w
 
 import app.services.config_writer as config_writer_module
-from app.models.config import AppConfig, CameraConfig, DetectionConfig
+from app.models.config import (
+    AppConfig,
+    CameraConfig,
+    DetectionConfig,
+    NotificationConfig,
+)
 from app.services.config_writer import (
     add_camera,
     load_config,
@@ -17,6 +22,7 @@ from app.services.config_writer import (
     save_config,
     update_camera,
     update_detection_config,
+    update_notification_config,
 )
 
 
@@ -237,3 +243,19 @@ class TestUpdateDetectionConfig:
         result = update_detection_config(detection, toml_file)
         assert len(result.cameras) == 1
         assert result.cameras[0].name == "cam1"
+
+
+class TestUpdateNotificationConfig:
+    def test_persists_and_preserves_cameras(self, toml_file: Path) -> None:
+        settings = NotificationConfig(enabled=True, cooldown_seconds=45)
+        result = update_notification_config(settings, toml_file)
+        assert result.notifications == settings
+        reloaded = load_config(toml_file)
+        assert reloaded.notifications == settings
+        assert [c.name for c in reloaded.cameras] == ["cam1"]
+
+    def test_camera_notification_mode_round_trips(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        camera = CameraConfig(name="cam1", host="h", notifications="on")
+        save_config(AppConfig(cameras=[camera]), path)
+        assert load_config(path).cameras[0].notifications == "on"

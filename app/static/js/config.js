@@ -398,6 +398,19 @@ class ConfigWidget {
                         </div>
                     </div>
 
+                    <div class="flex flex-col gap-1.5">
+                        <label for="cfg-notifications"
+                               class="text-xs text-slate-400 font-medium">Detection notifications</label>
+                        <select id="cfg-notifications" name="notifications" class="input-cfg">
+                            <option value="inherit">Use global setting (Admin)</option>
+                            <option value="on">On for this camera</option>
+                            <option value="off">Off for this camera</option>
+                        </select>
+                        <p class="text-xs text-slate-500">
+                            Notifies when any of the detection classes above is seen.
+                        </p>
+                    </div>
+
                 </form>
             </div>
             <div class="flex items-center justify-between gap-2 px-5 py-4
@@ -430,6 +443,7 @@ class ConfigWidget {
         f.querySelector('[name="user"]').value       = camera.user       ?? '';
         f.querySelector('[name="channel"]').value    = camera.channel    ?? '';
         f.querySelector('[name="stream"]').value     = camera.stream     ?? 'main';
+        f.querySelector('[name="notifications"]').value = camera.notifications ?? 'inherit';
         // password is intentionally left blank — backend keeps existing value when empty
     }
 
@@ -490,6 +504,7 @@ class ConfigWidget {
             channel:    Number(f.querySelector('[name="channel"]').value),
             stream:     f.querySelector('[name="stream"]').value,
             detection_classes: detectionClasses,
+            notifications: f.querySelector('[name="notifications"]').value,
         };
     }
 

@@ -22,6 +22,12 @@ def get_config(path: str = str(_CONFIG_PATH)) -> AppConfig:
     app_section = data.get("app", {})
     cameras = data.get("cameras", [])
     detection_section = data.get("detection", {})
+    notifications_section = data.get("notifications", {})
     return AppConfig.model_validate(
-        {**app_section, "cameras": cameras, "detection": detection_section}
+        {
+            **app_section,
+            "cameras": cameras,
+            "detection": detection_section,
+            "notifications": notifications_section,
+        }
     )

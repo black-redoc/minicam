@@ -549,6 +549,65 @@ class TestDeleteCameraDetectionHook:
         mock_stop_detection.assert_awaited_once_with("cam1")
 
 
+class TestCameraNotificationsField:
+    def test_create_returns_notification_mode(self, client: TestClient) -> None:
+        body = {
+            "name": "cam_notify",
+            "host": "10.0.0.20",
+            "password": "pass",
+            "notifications": "on",
+        }
+        with (
+            patch.object(setup_router, "add_camera") as mock_add,
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+            patch.object(setup_router, "_start_detection"),
+            patch.object(setup_router, "get_detection_backend", return_value=None),
+        ):
+            res = client.post("/api/cameras", json=body)
+
+        assert res.status_code == 201
+        assert res.json()["notifications"] == "on"
+        assert mock_add.call_args.args[0].notifications == "on"
+
+    def test_rejects_unknown_notification_mode(self, client: TestClient) -> None:
+        body = {"name": "c", "host": "h", "notifications": "always"}
+        assert client.post("/api/cameras", json=body).status_code == 422
+
+    def test_delete_forgets_notification_state(self, client: TestClient) -> None:
+        with (
+            patch.object(setup_router, "remove_camera"),
+            patch.object(setup_router, "get_config"),
+            patch.object(setup_router, "_stop_detection", AsyncMock()),
+            patch.object(setup_router.notification_runtime, "notifier") as notifier,
+        ):
+            res = client.delete("/api/cameras/cam1")
+
+        assert res.status_code == 200
+        notifier.forget.assert_called_once_with("cam1")
+
+    def test_rename_forgets_old_notification_state(self, client: TestClient) -> None:
+        old = _make_camera("cam1")
+        body = {"name": "cam1-renamed", "host": "10.0.0.21", "password": "pass"}
+        with (
+            patch.object(setup_router, "update_camera"),
+            patch.object(
+                setup_router, "get_config", return_value=_make_app_config(old)
+            ),
+            patch.object(setup_router, "_stop_camera", AsyncMock()),
+            patch.object(setup_router, "_stop_ptz", AsyncMock()),
+            patch.object(setup_router, "_stop_detection", AsyncMock()),
+            patch.object(setup_router, "_start_camera_and_ptz"),
+            patch.object(setup_router, "_start_detection"),
+            patch.object(setup_router, "get_detection_backend", return_value=None),
+            patch.object(setup_router.notification_runtime, "notifier") as notifier,
+        ):
+            res = client.put("/api/cameras/cam1", json=body)
+
+        assert res.status_code == 200
+        notifier.forget.assert_called_once_with("cam1")
+
+
 class TestDetectionClassValidation:
     def test_create_camera_returns_400_for_unknown_class(
         self, client: TestClient
