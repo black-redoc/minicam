@@ -89,6 +89,7 @@ Then, from a phone off Wi-Fi: open the hostname, pass the Access login, log in t
 | Page loads without an Access login | Access application missing or its domain doesn't match the hostname |
 | `403` on every WAN request | `MINICAM_CF_ACCESS_AUD` / `MINICAM_CF_ACCESS_TEAM_DOMAIN` wrong or unset, or the Access email differs from the minicam account's email |
 | `403` "WAN access is not enabled for this account" | step 6 not done for that user |
+| `403` "Invalid Cloudflare Access token" (dashboard loads, video and PTZ fail) | `MINICAM_CF_ACCESS_TEAM_DOMAIN` / `MINICAM_CF_ACCESS_AUD` don't match the Access application. The server log line `Rejected Cloudflare Access token: …` shows the token's `aud`/`iss` next to the expected ones; copy the real values into `.env` and restart (re-export `.env` first if you run `fastapi dev`) |
 | Remote users skip the WAN gate (only if the app also listens on IPv6) | the tunnel targets `localhost`/`::1` instead of `127.0.0.1` |
 
 ## Mobile apps

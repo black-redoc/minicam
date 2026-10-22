@@ -95,13 +95,13 @@ Unlike camera config, the security layer (sessions, stream tokens, WAN access) i
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|--------------|
-| `MINICAM_JWT_SECRET` | **yes** | — | Secret used to sign session and stream-token JWTs. The app refuses to start without it. See [Initial Setup](#initial-setup-creating-minicam_jwt_secret). |
+| `MINICAM_JWT_SECRET` | **yes** | — | Secret used to sign session and stream-token JWTs. The app refuses to start without it, or with the `.env.example` placeholder. See [Initial Setup](#initial-setup-creating-minicam_jwt_secret). |
 | `MINICAM_SESSION_TTL_SECONDS` | no | `86400` (24h) | How long a login session stays valid before it must be renewed via a new login. |
 | `MINICAM_STREAM_TOKEN_TTL_SECONDS` | no | `30` | Lifetime of the short-lived token that authorizes one WebSocket handshake. See [Video Streaming](/doc/stream). |
 | `MINICAM_DB_PATH` | no | `app/minicam.db` | Path to the SQLite database storing users, sessions, camera permissions, and WAN access flags. |
 | `MINICAM_TRUSTED_PROXIES` | no | `""` (empty) | Comma-separated list of proxy IPs. Requests arriving through one of these are always classified as WAN — see [Authentication & Authorization](/doc/auth). |
-| `MINICAM_CF_ACCESS_TEAM_DOMAIN` | required for WAN | — | Cloudflare Access team domain, used to fetch the JWKS that verifies the `Cf-Access-Jwt-Assertion` header on WAN requests. |
-| `MINICAM_CF_ACCESS_AUD` | required for WAN | — | Audience (AUD) tag of the Cloudflare Access application protecting this tunnel hostname. |
+| `MINICAM_CF_ACCESS_TEAM_DOMAIN` | required for WAN | — | Cloudflare Access team domain, used to fetch the JWKS that verifies the `Cf-Access-Jwt-Assertion` header on WAN requests. Leave empty without a tunnel; the `.env.example` placeholder stops the app from starting. |
+| `MINICAM_CF_ACCESS_AUD` | required for WAN | — | Audience (AUD) tag of the Cloudflare Access application protecting this tunnel hostname. Leave empty without a tunnel; the `.env.example` placeholder stops the app from starting. |
 | `MINICAM_VAPID_SUBJECT` | no | `mailto:minicam@example.com` | VAPID contact (`mailto:` or `https:` URL) sent with every Web Push. Set your own address. See [Detection Notifications](/doc/notifications). |
 | `MINICAM_MODEL_CATALOG_URL` | no | latest [minicam-models](https://github.com/black-redoc/minicam-models) release `manifest.json` | Manifest the AI Detection model catalog lists and installs from. Point it at a tagged release to pin model versions. See [Object Detection](/doc/detection). |
 
