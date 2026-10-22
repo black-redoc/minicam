@@ -29,6 +29,8 @@ module.exports = [
       "app/static/js/admin.js",
       "app/static/js/ai-detection.js",
       "app/static/js/model-catalog.js",
+      "app/static/js/notifications.js",
+      "app/static/js/notification-settings.js",
     ],
     languageOptions: {
       globals: {
@@ -54,6 +56,15 @@ module.exports = [
     languageOptions: {
       globals: {
         detectionSettingsPage: "readonly",
+      },
+    },
+  },
+  {
+    // service-worker.js runs in the ServiceWorkerGlobalScope, not a page.
+    files: ["app/static/js/service-worker.js"],
+    languageOptions: {
+      globals: {
+        ...globals.serviceworker,
       },
     },
   },

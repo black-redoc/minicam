@@ -53,6 +53,43 @@
         <p id="create-user-error" class="hidden text-xs text-red-400" role="alert"></p>
     </section>
 
+    <!-- Detection notifications (all cameras) -->
+    <section class="card flex flex-col gap-4">
+        <h2 class="text-xs text-slate-500 uppercase tracking-widest font-semibold">
+            Detection notifications
+        </h2>
+        <form id="notification-settings-form" class="flex flex-col gap-3">
+            <label class="flex items-center gap-2 text-sm text-slate-300">
+                <input id="notifications-enabled" type="checkbox" class="accent-sky-500">
+                Notify on detections for all cameras
+            </label>
+            <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
+                <div class="flex flex-col gap-1 w-full sm:w-48">
+                    <label for="notifications-cooldown" class="text-xs text-slate-400">
+                        Cooldown per camera (seconds)
+                    </label>
+                    <input id="notifications-cooldown" type="number" min="1" max="86400" required
+                           class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
+                                  text-sm text-slate-100 focus:outline-none focus:ring-2
+                                  focus:ring-sky-500">
+                </div>
+                <button type="submit"
+                        class="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold
+                               text-sm rounded-lg px-4 h-9 shrink-0 transition-colors
+                               disabled:opacity-50 disabled:cursor-not-allowed">
+                    Save
+                </button>
+            </div>
+            <p class="text-xs text-slate-500">
+                Notifies users who can view a camera when one of its selected detection
+                classes is seen. A camera's own setting (Camera settings &rarr; Detection
+                notifications) overrides this switch.
+            </p>
+        </form>
+        <p id="notification-settings-error" class="hidden text-xs text-red-400" role="alert"></p>
+        <p id="notification-settings-success" class="hidden text-xs text-emerald-400" role="status">Saved.</p>
+    </section>
+
     <!-- Users + per-camera permissions -->
     <section class="flex flex-col gap-3">
         <h2 class="text-xs text-slate-500 uppercase tracking-widest font-semibold px-1">
@@ -72,4 +109,5 @@
 <script src="{{ url_for('static', path='js/auth.js') }}"></script>
 <script src="{{ url_for('static', path='js/confirm-dialog.js') }}"></script>
 <script src="{{ url_for('static', path='js/admin.js') }}"></script>
+<script src="{{ url_for('static', path='js/notification-settings.js') }}"></script>
 {% endblock %}

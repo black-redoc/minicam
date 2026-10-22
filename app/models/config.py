@@ -6,6 +6,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
+# Per-camera notification override: "inherit" follows the global
+# [notifications] switch, "on"/"off" force it for this camera only.
+NotificationMode = Literal["inherit", "on", "off"]
+
 
 class CameraConfig(BaseModel):
     name: str
@@ -17,6 +21,7 @@ class CameraConfig(BaseModel):
     channel: int = 1
     stream: Literal["main", "sub"] = "main"
     detection_classes: list[str] = Field(default_factory=list)
+    notifications: NotificationMode = "inherit"
 
     # The pydantic.mypy plugin does not special-case @computed_field stacked
     # on @property in this pydantic/mypy version combination, so mypy's core
@@ -41,12 +46,20 @@ class DetectionConfig(BaseModel):
     inference_fps: float = Field(3.0, gt=0.0)
 
 
+class NotificationConfig(BaseModel):
+    """Detection notification settings, persisted in config.toml."""
+
+    enabled: bool = False
+    cooldown_seconds: int = Field(60, ge=1, le=86400)
+
+
 class AppConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8080
     debug: bool = False
     cameras: list[CameraConfig] = Field(default_factory=list)
     detection: DetectionConfig = Field(default_factory=DetectionConfig)
+    notifications: NotificationConfig = Field(default_factory=NotificationConfig)
 
 
 class CameraConfigResponse(BaseModel):
@@ -61,6 +74,7 @@ class CameraConfigResponse(BaseModel):
     channel: int
     stream: Literal["main", "sub"]
     detection_classes: list[str] = Field(default_factory=list)
+    notifications: NotificationMode = "inherit"
 
 
 class CameraConfigRequest(BaseModel):
@@ -75,6 +89,7 @@ class CameraConfigRequest(BaseModel):
     channel: int = Field(1, ge=1)
     stream: Literal["main", "sub"] = "main"
     detection_classes: list[str] = Field(default_factory=list)
+    notifications: NotificationMode = "inherit"
 
 
 class DiscoveredCamera(BaseModel):
@@ -140,3 +155,23 @@ class CatalogInstallResponse(BaseModel):
     model_path: str
     sha256: str
     active: bool
+
+
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str = Field(..., min_length=1, max_length=256)
+    auth: str = Field(..., min_length=1, max_length=64)
+
+
+class PushSubscriptionRequest(BaseModel):
+    """A browser PushSubscription, as returned by PushSubscription.toJSON()."""
+
+    endpoint: str = Field(..., min_length=1, max_length=2048)
+    keys: PushSubscriptionKeys
+
+
+class PushUnsubscribeRequest(BaseModel):
+    endpoint: str = Field(..., min_length=1, max_length=2048)
+
+
+class VapidPublicKeyResponse(BaseModel):
+    public_key: str

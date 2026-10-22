@@ -94,6 +94,10 @@ uvx --from git+https://github.com/black-redoc/minicam-models minicam-models vali
 - Detection classes are validated server-side: `POST`/`PUT /api/cameras` rejects any class name the active backend doesn't recognize with a `400`.
 - Creating, editing, renaming, or deleting a camera starts/stops its detection worker the same way it already starts/stops the camera's RTSP capture and PTZ service — see `app/routers/setup.py`.
 
+## Notifications
+
+Detections can notify users in the dashboard and through Web Push, for all cameras or per camera. See [Detection Notifications](/doc/notifications).
+
 ## Roadmap
 
-Push notifications on detection and per-camera alarm schedules (e.g. only alert outside business hours) are planned as later, separate additions on top of this detection engine.
+Per-camera alarm schedules (e.g. only alert outside business hours) are planned as a later addition on top of the notification service.
