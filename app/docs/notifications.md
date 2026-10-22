@@ -34,7 +34,7 @@ notifications = "on"   # "inherit" | "on" | "off"
 
 ## Who receives them
 
-A notification goes only to active users with `can_view` on that camera (see [Authentication & Authorization](/doc/auth)). Recipients are resolved when each notification is sent, so a revoked permission stops notifications right away. Admins need a `can_view` permission too, like for the dashboard.
+A notification goes only to active users with `can_view` on that camera (see [Authentication & Authorization](/doc/auth)). Recipients are resolved when each notification is sent, so a revoked permission stops notifications right away. Admins need a `can_view` permission too, like for the dashboard. The WAN access flag (`wan_access`) is not required to receive notifications, including Web Push. It only gates WAN requests, such as opening the event stream or registering a browser from outside the LAN.
 
 ## How they are delivered
 
