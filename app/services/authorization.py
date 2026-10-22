@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.models.domain import CameraPermission
 from app.repositories.permission_repository import PermissionRepository
 
 
@@ -17,6 +18,9 @@ class AuthorizationService:
         permission = await self._permission_repository.get(user_id, camera_name)
         return permission is not None and permission.can_use_ptz
 
-    async def list_viewable_camera_names(self, user_id: int) -> list[str]:
+    async def list_viewable_permissions(self, user_id: int) -> list[CameraPermission]:
         permissions = await self._permission_repository.list_for_user(user_id)
-        return [p.camera_name for p in permissions if p.can_view]
+        return [p for p in permissions if p.can_view]
+
+    async def list_viewable_camera_names(self, user_id: int) -> list[str]:
+        return [p.camera_name for p in await self.list_viewable_permissions(user_id)]
