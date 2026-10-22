@@ -1,17 +1,21 @@
 /**
- * Admin page — create users and manage per-camera view/PTZ permissions.
+ * Admin page — create users and manage per-camera view/PTZ permissions
+ * and each user's WAN access.
  *
  * All data is fetched client-side from the existing admin-only API:
  *   GET  /api/cameras          - cameras configured on this Pi
  *   GET  /api/auth/users       - every account
  *   GET  /api/auth/permissions?user_id=X - one user's camera permissions
+ *   GET  /api/auth/wan-access?user_id=X  - one user's WAN access
  *   POST /api/auth/users       - create an account
  *   POST /api/auth/permissions - upsert one (user, camera) permission
+ *   POST /api/auth/wan-access  - grant or revoke one user's WAN access
  */
 
 const ADMIN_CAMERAS_API     = '/api/cameras';
 const USERS_API       = '/api/auth/users';
 const PERMISSIONS_API = '/api/auth/permissions';
+const WAN_ACCESS_API  = '/api/auth/wan-access';
 
 class AdminPage {
     #listEl
@@ -45,21 +49,25 @@ class AdminPage {
             return;
         }
 
-        const permissionsByUser = await Promise.all(
-            users.map((user) => this.#fetchJson(`${PERMISSIONS_API}?user_id=${user.id}`)),
-        );
+        const [permissionsByUser, wanAccessByUser] = await Promise.all([
+            Promise.all(users.map((user) => this.#fetchJson(`${PERMISSIONS_API}?user_id=${user.id}`))),
+            Promise.all(users.map((user) => this.#fetchJson(`${WAN_ACCESS_API}?user_id=${user.id}`))),
+        ]);
 
         this.#listEl.innerHTML = '';
         users.forEach((user, i) => {
-            this.#listEl.appendChild(this.#buildUserCard(user, permissionsByUser[i]));
+            this.#listEl.appendChild(
+                this.#buildUserCard(user, permissionsByUser[i], wanAccessByUser[i].is_active),
+            );
         });
     }
 
     /**
      * @param {{id: number, email: string, is_admin: boolean}} user
      * @param {Array<{camera_name: string, can_view: boolean, can_use_ptz: boolean}>} permissions
+     * @param {boolean} wanAccess
      */
-    #buildUserCard(user, permissions) {
+    #buildUserCard(user, permissions, wanAccess) {
         const permByCamera = new Map(permissions.map((p) => [p.camera_name, p]));
 
         const card = document.createElement('div');
@@ -70,6 +78,12 @@ class AdminPage {
                     <span class="text-sm font-medium text-slate-100 truncate">${this.#escape(user.email)}</span>
                     ${user.is_admin ? '<span class="badge">admin</span>' : ''}
                 </div>
+                <div class="flex items-center gap-3 shrink-0">
+                <label class="flex items-center gap-2 text-xs text-slate-400"
+                       title="Allow viewing streams and using PTZ from outside the local network (through Cloudflare Access)">
+                    <input type="checkbox" data-wan-access class="accent-sky-500">
+                    WAN access
+                </label>
                 <button type="button" data-delete-user
                         aria-label="Delete user ${this.#escape(user.email)}"
                         title="Delete user"
@@ -86,10 +100,15 @@ class AdminPage {
                         <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
                     </svg>
                 </button>
+                </div>
             </div>
         `;
         card.querySelector('[data-delete-user]')
             .addEventListener('click', () => this.#deleteUser(user.id, user.email));
+
+        const wanCheckbox = /** @type {HTMLInputElement} */ (card.querySelector('[data-wan-access]'));
+        wanCheckbox.checked = wanAccess;
+        wanCheckbox.addEventListener('change', () => this.#saveWanAccess(user.id, wanCheckbox));
 
         if (this.#cameras.length === 0) {
             const empty = document.createElement('p');
@@ -172,6 +191,36 @@ class AdminPage {
                 can_use_ptz: canUsePtz,
             }),
         });
+    }
+
+    /**
+     * Persist the checkbox state; on failure, put it back and show why.
+     *
+     * @param {number} userId
+     * @param {HTMLInputElement} checkbox
+     */
+    async #saveWanAccess(userId, checkbox) {
+        const errorEl = document.getElementById('users-list-error');
+        errorEl.classList.add('hidden');
+        checkbox.disabled = true;
+        try {
+            const res = await authedFetch(WAN_ACCESS_API, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: userId, is_active: checkbox.checked }),
+            });
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.detail ?? `Failed to update WAN access (${res.status}).`);
+            }
+        } catch (err) {
+            if (err instanceof SessionExpiredError) return; // authedFetch already redirected
+            checkbox.checked = !checkbox.checked;
+            errorEl.textContent = err instanceof Error ? err.message : String(err);
+            errorEl.classList.remove('hidden');
+        } finally {
+            checkbox.disabled = false;
+        }
     }
 
     /**

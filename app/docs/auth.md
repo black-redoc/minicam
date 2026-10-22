@@ -130,11 +130,22 @@ Classification is fail-safe: any request that can't be confidently placed on the
 
 `wan_access` is deny-by-default too: no row for a user means WAN access is off. If the gate is closed, WAN callers get **`403`** ("WAN access is not enabled for this account") from `POST /api/stream/{camera_name}/token` and `POST /api/ptz/{camera_name}/{action}`.
 
-> **Current gap:** there is no admin endpoint or CLI command yet to grant `wan_access` — the migration's own comment describes it as "set by hand (CLI/admin endpoint)," but only the repository method (`SQLiteWanAccessRepository.set_active`) exists today, with no caller. Enabling WAN access currently means writing directly to the `wan_access` table in the SQLite database.
+### Granting WAN access (admin-only)
+
+Tick **WAN access** on the user's card in the [Admin Page](#admin-page). It takes effect on that user's next request. The same is available over the API:
+
+```
+GET  /api/auth/wan-access?user_id=2
+POST /api/auth/wan-access   { "user_id": 2, "is_active": true }
+```
+
+Both return `{ "user_id": 2, "is_active": true }`; a user with no row reads as `false`. `POST` returns **`404`** if the user doesn't exist.
+
+Admins are gated too: an admin who wants to use minicam from outside needs their own WAN access ticked (do it from the LAN first).
 
 ## Admin Page
 
-`GET /admin` (admin-only) serves the user + permission management UI (`app/templates/admin.html`, `app/static/js/admin.js`): create users, list users, delete users, and grant/revoke per-camera permissions. Camera CRUD itself (add/edit/remove camera, WS-Discovery) stays on the main dashboard's "Camera settings" modal — see [Multi-Camera Setup](/doc/cameras).
+`GET /admin` (admin-only) serves the user + permission management UI (`app/templates/admin.html`, `app/static/js/admin.js`): create users, list users, delete users, grant/revoke per-camera permissions, and grant/revoke each user's WAN access. Camera CRUD itself (add/edit/remove camera, WS-Discovery) stays on the main dashboard's "Camera settings" modal — see [Multi-Camera Setup](/doc/cameras).
 
 ## Bootstrapping
 

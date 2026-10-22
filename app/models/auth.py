@@ -47,6 +47,18 @@ class SetPermissionRequest(BaseModel):
     can_use_ptz: bool = False
 
 
+class SetWanAccessRequest(BaseModel):
+    user_id: int
+    is_active: bool
+
+
+class WanAccessPublic(BaseModel):
+    """A user's WAN gate; no row in wan_access reads as is_active=False."""
+
+    user_id: int
+    is_active: bool
+
+
 class CameraPermissionPublic(BaseModel):
     user_id: int
     camera_name: str

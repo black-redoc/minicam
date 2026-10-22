@@ -22,6 +22,8 @@ Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unle
 | `GET` | `/api/auth/users` | admin | List all users |
 | `DELETE` | `/api/auth/users/{user_id}` | admin | Delete a user |
 | `POST` | `/api/auth/permissions` | admin | Grant/update a user's camera permission |
+| `GET` | `/api/auth/wan-access?user_id=` | admin | Whether a user has WAN access |
+| `POST` | `/api/auth/wan-access` | admin | Grant/revoke a user's WAN access |
 | `GET` | `/api/auth/permissions?user_id=` | admin | List a user's camera permissions |
 | `GET` | `/api/me/cameras` | session | Cameras the caller can view, as JSON (mobile apps) |
 | `GET` | `/api/mobile/access-handoff?state=` | WAN + Cloudflare Access | Hand the Access token to the mobile app (`302` to `minicam://`) |
