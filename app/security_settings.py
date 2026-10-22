@@ -17,6 +17,15 @@ _DEFAULT_STREAM_TOKEN_TTL_SECONDS = 30
 _DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "minicam.db"
 _JWT_ALGORITHM = "HS256"
 
+# Values shipped in .env.example. Running with any of them is always a
+# mistake: the JWT secret is public, and the Cloudflare Access ones make every
+# WAN request fail with an opaque "Invalid Cloudflare Access token" 403.
+_PLACEHOLDER_VALUES: dict[str, frozenset[str]] = {
+    "MINICAM_JWT_SECRET": frozenset({"changeme-generate-a-random-64-char-hex-string"}),
+    "MINICAM_CF_ACCESS_TEAM_DOMAIN": frozenset({"https://myteam.cloudflareaccess.com"}),
+    "MINICAM_CF_ACCESS_AUD": frozenset({"changeme-aud-tag-from-access-application"}),
+}
+
 
 @dataclass(frozen=True, slots=True)
 class SecuritySettings:
@@ -28,6 +37,16 @@ class SecuritySettings:
     trusted_proxies: frozenset[str] = field(default_factory=frozenset)
     cf_access_team_domain: str | None = None
     cf_access_aud: str | None = None
+
+
+def _reject_placeholders() -> None:
+    for env_var, placeholders in _PLACEHOLDER_VALUES.items():
+        if os.environ.get(env_var, "").strip() in placeholders:
+            raise RuntimeError(
+                f"{env_var} still has the example value from .env.example — set "
+                "the real value (see app/docs/configuration.md), or leave the "
+                "Cloudflare Access ones empty if you don't use the tunnel"
+            )
 
 
 def _read_int(env_var: str, default: int) -> int:
@@ -46,8 +65,10 @@ def get_security_settings() -> SecuritySettings:
 
     Raises:
         RuntimeError: if MINICAM_JWT_SECRET is not set — there is no safe
-            default for a token-signing secret.
+            default for a token-signing secret — or if any setting still has
+            its .env.example placeholder value.
     """
+    _reject_placeholders()
     secret = os.environ.get("MINICAM_JWT_SECRET")
     if not secret:
         raise RuntimeError(
