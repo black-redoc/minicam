@@ -8,9 +8,13 @@ against Cloudflare's published JWKS and returning the verified identity.
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 
 import jwt
+
+logger = logging.getLogger(__name__)
 
 _ACCESS_JWT_ALGORITHM = "RS256"
 
@@ -52,12 +56,44 @@ class CloudflareAccessVerifier:
                 issuer=self._issuer,
             )
         except jwt.PyJWTError as exc:
+            logger.warning(
+                "Rejected Cloudflare Access token: %s: %s (%s)",
+                type(exc).__name__,
+                exc,
+                self._describe_unverified(token),
+            )
             raise InvalidAccessTokenError(
                 "Malformed, expired, or forged Cloudflare Access token"
             ) from exc
 
         email = payload.get("email")
         if not email:
+            logger.warning(
+                "Rejected Cloudflare Access token: no email claim (%s)",
+                self._describe_unverified(token),
+            )
             raise InvalidAccessTokenError("Access token is missing the email claim")
 
         return AccessTokenPayload(email=email)
+
+    def _describe_unverified(self, token: str) -> str:
+        """Summarize a rejected token's non-identifying claims for the log.
+
+        Never includes the token itself or the email: only what's needed to
+        tell an expired token from a wrong application (aud) or team (iss).
+        The claims are read without verification, so they are only a hint.
+        """
+        try:
+            claims = jwt.decode(token, options={"verify_signature": False})
+        except jwt.PyJWTError:
+            return "token is not a decodable JWT"
+        now = int(time.time())
+        parts = [
+            f"aud={claims.get('aud')!r} expected={self._audience!r}",
+            f"iss={claims.get('iss')!r} expected={self._issuer!r}",
+        ]
+        for claim in ("iat", "exp"):
+            value = claims.get(claim)
+            if isinstance(value, int | float):
+                parts.append(f"{claim}={int(value) - now:+d}s from now")
+        return ", ".join(parts)
