@@ -70,16 +70,7 @@ Then `sudo systemctl restart minicam.service`.
 
 ### 6. Grant `wan_access` to each remote user
 
-There is no admin UI or CLI for this yet (see [Authentication & Authorization](/doc/auth#wan-access-gate)), so set it in the database (`MINICAM_DB_PATH`) — the statement is idempotent:
-
-```bash
-sqlite3 /path/to/minicam.db "INSERT INTO wan_access (user_id, is_active) \
-  SELECT id, 1 FROM users WHERE email = 'user@example.com' \
-  ON CONFLICT(user_id) DO UPDATE SET is_active = 1, \
-  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');"
-```
-
-Use `is_active = 0` (in both places) to revoke it.
+On the **Admin** page, tick **WAN access** on each user who should reach minicam from outside — including your own account if you're an admin. Do it from the LAN: until it's ticked, the WAN gate blocks that user. Untick it to revoke. See [Authentication & Authorization](/doc/auth#granting-wan-access-admin-only).
 
 ### 7. Verify
 

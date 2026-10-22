@@ -1,4 +1,6 @@
-"""Auth API: login/logout/me, plus admin-only user and permission management."""
+"""Auth API: login/logout/me, plus admin-only management of users, camera
+permissions and WAN access.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from app.dependencies import (
     get_session_repository,
     get_token_service,
     get_user_repository,
+    get_wan_access_repository,
     require_admin,
 )
 from app.models.auth import (
@@ -26,12 +29,15 @@ from app.models.auth import (
     LoginRequest,
     SetPermissionRequest,
     SetupStatusResponse,
+    SetWanAccessRequest,
     UserPublic,
+    WanAccessPublic,
 )
 from app.models.domain import User
 from app.repositories.permission_repository import PermissionRepository
 from app.repositories.session_repository import SessionRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.wan_access_repository import WanAccessRepository
 from app.security_settings import SecuritySettings, get_security_settings
 from app.services.auth import InvalidSessionTokenError, PasswordHasher, TokenService
 from app.services.login_rate_limiter import LoginRateLimiter
@@ -304,3 +310,39 @@ async def list_permissions(
         )
         for p in permissions
     ]
+
+
+@router.get(
+    "/wan-access",
+    response_model=WanAccessPublic,
+    dependencies=[Depends(require_admin)],
+)
+async def get_wan_access(
+    user_id: int,
+    wan_access_repository: WanAccessRepository = Depends(get_wan_access_repository),
+) -> WanAccessPublic:
+    """Whether a user may stream and use PTZ from outside the LAN. Admin-only."""
+    wan_access = await wan_access_repository.get(user_id)
+    return WanAccessPublic(
+        user_id=user_id, is_active=wan_access is not None and wan_access.is_active
+    )
+
+
+@router.post(
+    "/wan-access",
+    response_model=WanAccessPublic,
+    dependencies=[Depends(require_admin)],
+)
+async def set_wan_access(
+    body: SetWanAccessRequest,
+    user_repository: UserRepository = Depends(get_user_repository),
+    wan_access_repository: WanAccessRepository = Depends(get_wan_access_repository),
+) -> WanAccessPublic:
+    """Grant or revoke a user's WAN access. Admin-only.
+
+    Takes effect on the user's next request; the gate reads it every time.
+    """
+    if await user_repository.get_by_id(body.user_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    wan_access = await wan_access_repository.set_active(body.user_id, body.is_active)
+    return WanAccessPublic(user_id=wan_access.user_id, is_active=wan_access.is_active)
