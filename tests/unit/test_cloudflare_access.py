@@ -100,3 +100,64 @@ class TestVerify:
 
         with pytest.raises(InvalidAccessTokenError):
             verifier.verify(token)
+
+
+class TestRejectionLogging:
+    """A rejected token logs why (to diagnose WAN 403s), never the token or email."""
+
+    def test_expired_token_logs_reason_and_age(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        private_key, public_key = _keypair()
+        token = _sign(private_key, exp_offset=-120)
+
+        with caplog.at_level("WARNING"), pytest.raises(InvalidAccessTokenError):
+            _verifier_for(public_key).verify(token)
+
+        log = "\n".join(r.getMessage() for r in caplog.records)
+        assert "ExpiredSignatureError" in log
+        assert "exp=-" in log
+        assert token not in log
+        assert _EMAIL not in log
+
+    def test_wrong_audience_logs_both_audiences(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        private_key, public_key = _keypair()
+        token = _sign(private_key, aud="other-app")
+
+        with caplog.at_level("WARNING"), pytest.raises(InvalidAccessTokenError):
+            _verifier_for(public_key).verify(token)
+
+        log = "\n".join(r.getMessage() for r in caplog.records)
+        assert "InvalidAudienceError" in log
+        assert "aud='other-app'" in log
+        assert f"expected={_AUDIENCE!r}" in log
+        assert token not in log
+
+    def test_missing_email_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        private_key, public_key = _keypair()
+        token = _sign(private_key, email=None)
+
+        with caplog.at_level("WARNING"), pytest.raises(InvalidAccessTokenError):
+            _verifier_for(public_key).verify(token)
+
+        log = "\n".join(r.getMessage() for r in caplog.records)
+        assert "no email claim" in log
+        assert token not in log
+
+    def test_garbage_token_is_described_without_crashing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        verifier_jwks = MagicMock()
+        verifier_jwks.get_signing_key_from_jwt.side_effect = jwt.DecodeError("bad")
+        verifier = CloudflareAccessVerifier(
+            jwks_client=verifier_jwks, audience=_AUDIENCE, issuer=_ISSUER
+        )
+
+        with caplog.at_level("WARNING"), pytest.raises(InvalidAccessTokenError):
+            verifier.verify("not-a-jwt")
+
+        log = "\n".join(r.getMessage() for r in caplog.records)
+        assert "DecodeError" in log
+        assert "not a decodable JWT" in log
