@@ -49,6 +49,7 @@ from app.services.model_catalog import (
 )
 from app.services.notifications import runtime as notification_runtime
 from app.services.ptz import PTZConfig, PTZService
+from app.services.recording import runtime as recording_runtime
 from app.settings import get_config
 
 logger = logging.getLogger(__name__)
@@ -162,7 +163,12 @@ def _start_camera_and_ptz(cam_config: CameraConfig) -> None:
         buf = FrameBuffer()
         state.frame_buffers[cam_config.name] = buf
 
-    camera = RTSPCamera(rtsp_url=cam_config.rtsp_url, buffer=buf, name=cam_config.name)
+    camera = RTSPCamera(
+        rtsp_url=cam_config.rtsp_url,
+        buffer=buf,
+        name=cam_config.name,
+        recorder=recording_runtime.service.recorder_for(cam_config.name),
+    )
     camera.start()
     state.cameras[cam_config.name] = camera
 
@@ -230,6 +236,7 @@ async def edit_camera(name: str, body: CameraConfigRequest) -> CameraConfigRespo
     await _stop_detection(name)
     if name != cam_config.name:
         notification_runtime.notifier.forget(name)
+        recording_runtime.service.forget(name)
         old_buf = state.frame_buffers.pop(name, None)
         if old_buf is not None:
             old_buf.shutdown()
@@ -250,6 +257,7 @@ async def delete_camera(name: str) -> dict[str, str]:
     await _stop_ptz(name)
     await _stop_detection(name)
     notification_runtime.notifier.forget(name)
+    recording_runtime.service.forget(name)
     buf = state.frame_buffers.get(name)
     if buf is not None:
         buf.shutdown()

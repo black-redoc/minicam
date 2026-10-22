@@ -43,10 +43,16 @@ Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unle
 | `POST` | `/api/notifications/push/subscriptions` | session + WAN gate | Register a Web Push subscription |
 | `DELETE` | `/api/notifications/push/subscriptions` | session | Unregister a Web Push subscription |
 | `GET` | `/service-worker.js` | none | Service worker that displays Web Push notifications |
+| `GET` | `/recordings` | session (redirects to `/login` if none) | Event recordings page |
+| `GET` | `/api/recordings/settings` | admin | Recording settings, disk usage and selectable storage limits |
+| `PUT` | `/api/recordings/settings` | admin | Save recording settings |
+| `GET` | `/api/recordings` | session + WAN gate | Clips of viewable cameras, newest first |
+| `GET` | `/api/recordings/{id}/video` | session + `can_view` + WAN gate | A clip's MP4 file |
+| `DELETE` | `/api/recordings/{id}` | admin | Delete a clip |
 | `GET` | `/doc/` | none | Documentation index |
 | `GET` | `/doc/{topic}` | none | Documentation topic |
 
-See [Authentication & Authorization](/doc/auth) for the full `/api/auth/*` reference (request/response bodies, error codes). This page focuses on the camera-facing endpoints. The notification endpoints are described in [Detection Notifications](/doc/notifications).
+See [Authentication & Authorization](/doc/auth) for the full `/api/auth/*` reference (request/response bodies, error codes). This page focuses on the camera-facing endpoints. The notification endpoints are described in [Detection Notifications](/doc/notifications), and the recording endpoints in [Event Recordings](/doc/recordings).
 
 ---
 

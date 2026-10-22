@@ -107,7 +107,11 @@ class TestVersionedMigrations:
     async def test_records_each_applied_version(
         self, db_connection: aiosqlite.Connection
     ) -> None:
-        assert await _versions(db_connection) == ["0001_initial", "0002_web_push"]
+        assert await _versions(db_connection) == [
+            "0001_initial",
+            "0002_web_push",
+            "0003_recordings",
+        ]
 
     async def test_applies_pending_migrations_in_name_order(
         self, migrations_dir: Path
@@ -171,7 +175,11 @@ class TestVersionedMigrations:
         conn = await aiosqlite.connect(db_path)
         try:
             await apply_migrations(conn)
-            assert await _versions(conn) == ["0001_initial", "0002_web_push"]
+            assert await _versions(conn) == [
+                "0001_initial",
+                "0002_web_push",
+                "0003_recordings",
+            ]
             cursor = await conn.execute("SELECT email FROM users")
             assert [row[0] for row in await cursor.fetchall()] == ["a@b.c"]
         finally:

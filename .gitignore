@@ -54,6 +54,9 @@ credentials.json
 # =============================================================================
 app/data/models/
 
+# Event recording clips (app/services/recording/runtime.py RECORDINGS_DIR)
+app/data/recordings/
+
 # =============================================================================
 # Testing & coverage
 # =============================================================================
