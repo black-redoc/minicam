@@ -20,6 +20,10 @@ from app.repositories.push_subscription_repository import (
     PushSubscriptionRepository,
     SQLitePushSubscriptionRepository,
 )
+from app.repositories.recording_repository import (
+    RecordingRepository,
+    SQLiteRecordingRepository,
+)
 from app.repositories.session_repository import (
     SessionRepository,
     SQLiteSessionRepository,
@@ -78,6 +82,12 @@ def get_push_subscription_repository(
     conn: aiosqlite.Connection = Depends(get_db_connection),
 ) -> PushSubscriptionRepository:
     return SQLitePushSubscriptionRepository(conn)
+
+
+def get_recording_repository(
+    conn: aiosqlite.Connection = Depends(get_db_connection),
+) -> RecordingRepository:
+    return SQLiteRecordingRepository(conn)
 
 
 def get_password_hasher() -> PasswordHasher:

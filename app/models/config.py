@@ -53,6 +53,18 @@ class NotificationConfig(BaseModel):
     cooldown_seconds: int = Field(60, ge=1, le=86400)
 
 
+# Disk space the admin can reserve for event recordings, in GiB.
+RecordingStorageGb = Literal[1, 5, 10, 50]
+RECORDING_STORAGE_OPTIONS_GB: tuple[RecordingStorageGb, ...] = (1, 5, 10, 50)
+
+
+class RecordingConfig(BaseModel):
+    """Event recording settings, persisted in config.toml."""
+
+    enabled: bool = False
+    max_storage_gb: RecordingStorageGb = 5
+
+
 class AppConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8080
@@ -60,6 +72,7 @@ class AppConfig(BaseModel):
     cameras: list[CameraConfig] = Field(default_factory=list)
     detection: DetectionConfig = Field(default_factory=DetectionConfig)
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)
+    recordings: RecordingConfig = Field(default_factory=RecordingConfig)
 
 
 class CameraConfigResponse(BaseModel):
@@ -175,3 +188,34 @@ class PushUnsubscribeRequest(BaseModel):
 
 class VapidPublicKeyResponse(BaseModel):
     public_key: str
+
+
+class RecordingStorageOption(BaseModel):
+    """One selectable storage limit, and whether the disk can hold it."""
+
+    gb: int
+    available: bool
+
+
+class RecordingSettingsResponse(RecordingConfig):
+    """Recording settings plus the disk figures the Admin page needs."""
+
+    used_bytes: int
+    free_bytes: int
+    options: list[RecordingStorageOption]
+
+
+class RecordingResponse(BaseModel):
+    id: int
+    camera_name: str
+    started_at: str
+    duration_seconds: float
+    size_bytes: int
+    classes: list[str]
+
+
+class RecordingListResponse(BaseModel):
+    """A page of recordings, newest first; pass next_before for the next."""
+
+    items: list[RecordingResponse]
+    next_before: int | None

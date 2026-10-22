@@ -67,6 +67,15 @@ Only `name` and `host` are truly required — every other field falls back to it
 
 Edited from the Admin page. See [Detection Notifications](/doc/notifications).
 
+## `[recordings]` section
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `false` | Record a clip while any camera detects one of its detection classes |
+| `max_storage_gb` | integer | `5` | Disk space for clips: `1`, `5`, `10` or `50` (GB). The oldest clips are deleted beyond it |
+
+Edited from the Admin page. See [Event Recordings](/doc/recordings).
+
 ## RTSP URL Construction
 
 The RTSP URL is built automatically from the camera fields:

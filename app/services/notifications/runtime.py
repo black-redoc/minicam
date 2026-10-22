@@ -27,6 +27,7 @@ from app.services.notifications.notifier import (
 )
 from app.services.notifications.service import NotificationService
 from app.services.notifications.web_push import VapidKey, WebPushSender
+from app.services.recording import runtime as recording_runtime
 from app.settings import get_config
 
 logger = logging.getLogger(__name__)
@@ -56,11 +57,13 @@ notifier = DetectionNotifier(
 
 
 def detection_result_handler(camera_name: str) -> Callable[[DetectionSnapshot], None]:
-    """Build a DetectionWorker on_result callback for one camera."""
+    """Build a DetectionWorker on_result callback for one camera: stores the
+    snapshot for drawing, and feeds notifications and event recording."""
 
     def handle(snapshot: DetectionSnapshot) -> None:
         state.detection_results[camera_name] = snapshot
         notifier.on_snapshot(camera_name, snapshot)
+        recording_runtime.service.on_snapshot(camera_name, snapshot)
 
     return handle
 

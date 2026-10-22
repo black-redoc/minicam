@@ -14,6 +14,7 @@ from app.models.config import (
     CameraConfig,
     DetectionConfig,
     NotificationConfig,
+    RecordingConfig,
 )
 from app.services.config_writer import (
     add_camera,
@@ -23,6 +24,7 @@ from app.services.config_writer import (
     update_camera,
     update_detection_config,
     update_notification_config,
+    update_recording_config,
 )
 
 
@@ -259,3 +261,20 @@ class TestUpdateNotificationConfig:
         camera = CameraConfig(name="cam1", host="h", notifications="on")
         save_config(AppConfig(cameras=[camera]), path)
         assert load_config(path).cameras[0].notifications == "on"
+
+
+class TestUpdateRecordingConfig:
+    def test_persists_and_preserves_cameras(self, toml_file: Path) -> None:
+        settings = RecordingConfig(enabled=True, max_storage_gb=10)
+        result = update_recording_config(settings, toml_file)
+        assert result.recordings == settings
+        reloaded = load_config(toml_file)
+        assert reloaded.recordings == settings
+        assert [c.name for c in reloaded.cameras] == ["cam1"]
+        assert tomllib.loads(toml_file.read_text())["recordings"] == {
+            "enabled": True,
+            "max_storage_gb": 10,
+        }
+
+    def test_missing_section_uses_defaults(self, toml_file: Path) -> None:
+        assert load_config(toml_file).recordings == RecordingConfig()

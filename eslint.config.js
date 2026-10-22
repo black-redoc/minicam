@@ -31,6 +31,8 @@ module.exports = [
       "app/static/js/model-catalog.js",
       "app/static/js/notifications.js",
       "app/static/js/notification-settings.js",
+      "app/static/js/recording-settings.js",
+      "app/static/js/recordings.js",
     ],
     languageOptions: {
       globals: {
@@ -40,9 +42,13 @@ module.exports = [
     },
   },
   {
-    // config.js and admin.js both consume confirmDialog, defined in
+    // config.js, admin.js and recordings.js consume confirmDialog, defined in
     // confirm-dialog.js.
-    files: ["app/static/js/config.js", "app/static/js/admin.js"],
+    files: [
+      "app/static/js/config.js",
+      "app/static/js/admin.js",
+      "app/static/js/recordings.js",
+    ],
     languageOptions: {
       globals: {
         confirmDialog: "readonly",

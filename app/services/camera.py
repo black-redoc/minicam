@@ -3,14 +3,22 @@ from __future__ import annotations
 import logging
 import random
 import threading
+import time
+from fractions import Fraction
+from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
 import av
 from av.codec.context import Flags
+from av.container import OutputContainer
 
 from app.buffers.frame_buffer import FrameBuffer
+from app.services.av_io import av_io_lock
 from app.services.decoder import decode_video_frame
+from app.services.recording.packets import EncodedPacket
+from app.services.recording.recorder import CameraRecorder
+from app.services.recording.writer import open_output
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +41,9 @@ _STOP_TIMEOUT_SECONDS = 10.0
 _OPEN_TIMEOUT_SECONDS = 5.0
 _STALL_TIMEOUT_SECONDS = 15.0
 
-# Shared across every RTSPCamera instance/thread: PyAV/FFmpeg's container
-# open/close is not thread-safe even across unrelated streams — concurrent
-# av.open()/close() calls from different capture threads corrupted the
-# process heap in production. Demux/decode of an already-open container is
-# unaffected and still runs fully in parallel; only the open/close sequence
-# is serialized here.
-_av_io_lock = threading.Lock()
+# Shared across every RTSPCamera instance/thread and the clip writers: see
+# app/services/av_io.py for why container open/close must be serialized.
+_av_io_lock = av_io_lock
 
 
 def reconnect_delay(attempt: int, rand: float) -> float:
@@ -80,10 +84,15 @@ class RTSPCamera:
         rtsp_url: Full RTSP URL including credentials.
         buffer: The FrameBuffer to push frames into.
         name: Camera name, used for the capture thread's name.
+        recorder: Receives every demuxed packet for event recording, if any.
     """
 
     def __init__(
-        self, rtsp_url: str, buffer: FrameBuffer, name: str = "camera"
+        self,
+        rtsp_url: str,
+        buffer: FrameBuffer,
+        name: str = "camera",
+        recorder: CameraRecorder | None = None,
     ) -> None:
         self._name = name
         self._rtsp_url = rtsp_url
@@ -91,6 +100,7 @@ class RTSPCamera:
         # may ever reach a log line.
         self._log_url = redact_url(rtsp_url)
         self._buffer = buffer
+        self._recorder = recorder
         self._running = False
         self._connected = False
         self._sequence = 0
@@ -217,6 +227,10 @@ class RTSPCamera:
             video_stream.codec_context.thread_type = "SLICE"
             video_stream.codec_context.thread_count = 2
 
+        recorder = self._recorder
+        time_base = cast(Fraction, video_stream.time_base)
+        if recorder is not None:
+            recorder.on_stream_opened(self._open_clip_output)
         try:
             self._connected = True
             logger.info("RTSP stream opened: %s", self._log_url)
@@ -233,6 +247,25 @@ class RTSPCamera:
                     self._sequence += 1
                     self._buffer.write(frame)
                     self._got_frame = True
+                if recorder is not None:
+                    encoded = EncodedPacket.from_av(packet, time_base, time.monotonic())
+                    if encoded is not None:
+                        recorder.on_packet(encoded)
         finally:
+            if recorder is not None:
+                recorder.on_stream_closed()
             self._close_container()
             self._connected = False
+
+    def _open_clip_output(self, path: Path) -> OutputContainer | None:
+        """Open an MP4 output copying the live video stream's codec, or None
+        if the input is already closed (stop() or a reconnect raced us).
+
+        Holding the container lock keeps stop() from freeing the input
+        container while its stream is used as the template.
+        """
+        with self._container_lock, _av_io_lock:
+            container = self._container
+            if container is None or not self._running:
+                return None
+            return open_output(path, container.streams.video[0])

@@ -209,3 +209,42 @@ class TestAiDetectionPage:
         res = client.get("/ai-detection")
         assert res.status_code == 200
         assert "text/html" in res.headers["content-type"]
+
+
+class TestRecordingsPage:
+    def test_redirects_to_login_when_no_session(self, client: TestClient) -> None:
+        client.app.dependency_overrides[get_optional_current_user] = lambda: None
+        res = client.get("/recordings", follow_redirects=False)
+        assert res.status_code == 302
+        assert res.headers["location"] == "/login"
+
+    def test_filter_lists_only_viewable_cameras(self, client: TestClient) -> None:
+        config = AppConfig(cameras=[_make_camera("cam1"), _make_camera("garage")])
+        client.app.dependency_overrides[get_optional_current_user] = lambda: _USER
+        client.app.dependency_overrides[get_authorization_service] = lambda: _allow_all(
+            "cam1"
+        )
+        with patch.object(dashboard_router, "get_config", return_value=config):
+            res = client.get("/recordings")
+        assert res.status_code == 200
+        assert '<option value="cam1">cam1</option>' in res.text
+        assert "garage" not in res.text
+        assert 'id="recording-delete"' not in res.text
+
+    def test_admin_gets_the_delete_button(self, client: TestClient) -> None:
+        client.app.dependency_overrides[get_optional_current_user] = lambda: _ADMIN
+        client.app.dependency_overrides[get_authorization_service] = lambda: (
+            _allow_all()
+        )
+        with patch.object(dashboard_router, "get_config", return_value=AppConfig()):
+            res = client.get("/recordings")
+        assert 'id="recording-delete"' in res.text
+
+    def test_dashboard_menu_links_to_recordings(self, client: TestClient) -> None:
+        client.app.dependency_overrides[get_optional_current_user] = lambda: _USER
+        client.app.dependency_overrides[get_authorization_service] = lambda: (
+            _allow_all()
+        )
+        with patch.object(dashboard_router, "get_config", return_value=AppConfig()):
+            res = client.get("/")
+        assert 'href="/recordings"' in res.text

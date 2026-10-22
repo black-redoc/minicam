@@ -17,6 +17,7 @@ from app.routers import health as health_router
 from app.routers import mobile as mobile_router
 from app.routers import notifications as notifications_router
 from app.routers import ptz as ptz_router
+from app.routers import recordings as recordings_router
 from app.routers import setup as setup_router
 from app.routers import stream as stream_router
 from app.security_settings import get_security_settings
@@ -25,6 +26,7 @@ from app.services.detection.factory import get_detection_backend
 from app.services.detection.worker import DetectionWorker
 from app.services.notifications import runtime as notification_runtime
 from app.services.ptz import PTZConfig, PTZService
+from app.services.recording import runtime as recording_runtime
 from app.settings import get_config
 
 logging.basicConfig(
@@ -42,12 +44,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     security_settings = get_security_settings()
     conn = await init_db(security_settings.db_path)
     await notification_runtime.start_web_push(conn)
+    await recording_runtime.service.start()
 
     for cam in config.cameras:
         buf = FrameBuffer()
         state.frame_buffers[cam.name] = buf
 
-        camera = RTSPCamera(rtsp_url=cam.rtsp_url, buffer=buf, name=cam.name)
+        camera = RTSPCamera(
+            rtsp_url=cam.rtsp_url,
+            buffer=buf,
+            name=cam.name,
+            recorder=recording_runtime.service.recorder_for(cam.name),
+        )
         camera.start()
         state.cameras[cam.name] = camera
 
@@ -93,6 +101,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     for _name, ptz in state.ptz_services.items():
         if ptz.is_connected():
             ptz.disconnect()
+    await recording_runtime.service.shutdown()
     await notification_runtime.shutdown()
     await close_db()
     logger.info("Services shut down")
@@ -118,3 +127,4 @@ app.include_router(docs_router.router)
 app.include_router(health_router.router)
 app.include_router(mobile_router.router)
 app.include_router(notifications_router.router)
+app.include_router(recordings_router.router)

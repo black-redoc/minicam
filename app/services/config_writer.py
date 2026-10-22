@@ -14,6 +14,7 @@ from app.models.config import (
     CameraConfig,
     DetectionConfig,
     NotificationConfig,
+    RecordingConfig,
 )
 
 _CONFIG_PATH: Path = Path(__file__).resolve().parent.parent.parent / "config.toml"
@@ -31,12 +32,14 @@ def load_config(path: Path = _CONFIG_PATH) -> AppConfig:
     cameras = data.get("cameras", [])
     detection_section = data.get("detection", {})
     notifications_section = data.get("notifications", {})
+    recordings_section = data.get("recordings", {})
     return AppConfig.model_validate(
         {
             **app_section,
             "cameras": cameras,
             "detection": detection_section,
             "notifications": notifications_section,
+            "recordings": recordings_section,
         }
     )
 
@@ -60,6 +63,7 @@ def save_config(config: AppConfig, path: Path = _CONFIG_PATH) -> None:
         "cameras": cameras,
         "detection": config.detection.model_dump(),
         "notifications": config.notifications.model_dump(),
+        "recordings": config.recordings.model_dump(),
     }
     data = tomli_w.dumps(doc).encode()
     fd, tmp_name = tempfile.mkstemp(
@@ -127,5 +131,15 @@ def update_notification_config(
     """Replace the notifications config section and persist it."""
     config = load_config(path)
     config.notifications = notifications
+    save_config(config, path)
+    return config
+
+
+def update_recording_config(
+    recordings: RecordingConfig, path: Path = _CONFIG_PATH
+) -> AppConfig:
+    """Replace the recordings config section and persist it."""
+    config = load_config(path)
+    config.recordings = recordings
     save_config(config, path)
     return config

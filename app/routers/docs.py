@@ -27,6 +27,7 @@ _TOPIC_TITLES: dict[str, str] = {
     "discovery": "Camera Discovery",
     "detection": "Object Detection (YOLO)",
     "notifications": "Detection Notifications",
+    "recordings": "Event Recordings",
 }
 
 

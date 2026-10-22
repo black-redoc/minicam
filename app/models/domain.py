@@ -56,3 +56,15 @@ class PushSubscription:
     p256dh: str
     auth: str
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class Recording:
+    id: int
+    camera_name: str
+    file_name: str
+    started_at: str
+    duration_seconds: float
+    size_bytes: int
+    classes: tuple[str, ...]
+    created_at: str

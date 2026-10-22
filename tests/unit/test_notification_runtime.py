@@ -83,3 +83,14 @@ async def test_start_web_push_generates_key_once(
     )
     await runtime.shutdown()
     assert runtime.service.push_sender is None
+
+
+def test_result_handler_feeds_event_recording() -> None:
+    snapshot = DetectionSnapshot([Detection("person", 0.9, 0, 0, 1, 1)], sequence=1)
+    handler = runtime.detection_result_handler("cam1")
+    with (
+        patch.object(runtime, "get_config", return_value=_config()),
+        patch.object(runtime.recording_runtime.service, "on_snapshot") as on_snapshot,
+    ):
+        handler(snapshot)
+    on_snapshot.assert_called_once_with("cam1", snapshot)

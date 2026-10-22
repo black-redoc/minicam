@@ -71,6 +71,27 @@ async def admin_page(
     return templates.TemplateResponse(request=request, name="admin.html")
 
 
+@router.get("/recordings", response_model=None)
+async def recordings_page(
+    request: Request,
+    user: User | None = Depends(get_optional_current_user),
+    authorization_service: AuthorizationService = Depends(get_authorization_service),
+) -> HTMLResponse | RedirectResponse:
+    """Serve the event recordings page shell. The clips load client-side via
+    /api/recordings — see app/static/js/recordings.js.
+    """
+    if user is None:
+        return RedirectResponse(url="/login", status_code=302)
+
+    viewable = await authorization_service.list_viewable_camera_names(user.id)
+    camera_names = [cam.name for cam in get_config().cameras if cam.name in viewable]
+    return templates.TemplateResponse(
+        request=request,
+        name="recordings.html",
+        context={"camera_names": camera_names, "is_admin": user.is_admin},
+    )
+
+
 @router.get("/ai-detection", response_class=HTMLResponse)
 async def ai_detection_page(
     request: Request, _admin: User = Depends(require_admin)

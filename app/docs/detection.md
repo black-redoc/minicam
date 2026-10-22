@@ -98,6 +98,10 @@ uvx --from git+https://github.com/black-redoc/minicam-models minicam-models vali
 
 Detections can notify users in the dashboard and through Web Push, for all cameras or per camera. See [Detection Notifications](/doc/notifications).
 
+## Recordings
+
+Detections can also record short MP4 clips of each event, viewable from the dashboard. See [Event Recordings](/doc/recordings).
+
 ## Roadmap
 
 Per-camera alarm schedules (e.g. only alert outside business hours) are planned as a later addition on top of the notification service.
