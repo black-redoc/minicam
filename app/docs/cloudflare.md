@@ -100,6 +100,16 @@ Then, from a phone off Wi-Fi: open the hostname, pass the Access login, log in t
 | `403` "WAN access is not enabled for this account" | step 6 not done for that user |
 | Remote users skip the WAN gate (only if the app also listens on IPv6) | the tunnel targets `localhost`/`::1` instead of `127.0.0.1` |
 
+## Mobile apps
+
+The native apps (minicam-mobile) can't complete Access's login page themselves, and they can't read the `CF_Authorization` cookie from the system browser. Instead they open `GET /api/mobile/access-handoff?state=<random>` in the system browser (Custom Tabs on Android, `ASWebAuthenticationSession` on iOS):
+
+1. Access stops the request and shows its login, exactly as for the browser.
+2. Once the user is through, FastAPI verifies the forwarded `Cf-Access-Jwt-Assertion` with the same `CloudflareAccessVerifier` used for every WAN request, and answers `302` to `minicam://access-callback?state=<state>#token=<that JWT>`. The redirect target is fixed server-side (no open redirect), and the token goes in the URL fragment, so it doesn't end up in access logs.
+3. The app checks that `state` matches the one it sent, stores the token in the Keychain / Android Keystore, and sends it as the `cf-access-token` header on every request and WebSocket handshake. Cloudflare accepts that header in place of the cookie and forwards the identity to FastAPI as usual.
+
+The token grants nothing by itself: the app still logs in with the user's minicam password, and the email in the Access token must match that user, as above. Nothing needs to be configured for this beyond the setup steps above.
+
 ## The Tunnel
 
 `cloudflared` runs as a systemd service (`cloudflared.service`, installed with `cloudflared service install <token>`) on the same machine as the FastAPI app. It opens an outbound-only connection to Cloudflare and maps a hostname on your own domain to `localhost:8080` — there is no port forwarding, no public IP, and no inbound firewall rule. The tunnel and its route are managed entirely from the Cloudflare Zero Trust dashboard (Networks -> Tunnels), not from a `config.yml` on this machine.

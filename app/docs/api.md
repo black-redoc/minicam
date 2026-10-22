@@ -23,6 +23,8 @@ Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unle
 | `DELETE` | `/api/auth/users/{user_id}` | admin | Delete a user |
 | `POST` | `/api/auth/permissions` | admin | Grant/update a user's camera permission |
 | `GET` | `/api/auth/permissions?user_id=` | admin | List a user's camera permissions |
+| `GET` | `/api/me/cameras` | session | Cameras the caller can view, as JSON (mobile apps) |
+| `GET` | `/api/mobile/access-handoff?state=` | WAN + Cloudflare Access | Hand the Access token to the mobile app (`302` to `minicam://`) |
 | `POST` | `/api/stream/{camera_name}/token` | session + `can_view` | Issue a short-lived WebSocket stream token |
 | `WS` | `/ws/stream/{camera_name}?token=` | stream token | Binary JPEG stream |
 | `POST` | `/api/ptz/{camera_name}/{action}` | session + `can_use_ptz` | PTZ move/stop |
@@ -214,6 +216,27 @@ Remove a camera. Stops its thread and removes it from config.
 ```json
 { "detail": "Camera 'patio' not found" }
 ```
+
+---
+
+## `GET /api/me/cameras`
+
+Requires a session (any role). Lists the cameras the caller has `can_view` on, in config order — the same filter as the dashboard. Used by the native mobile apps, which can't read the server-rendered dashboard.
+
+**Response `200`:**
+```json
+[{ "name": "entrada", "can_use_ptz": true }]
+```
+
+**Response `401`** (no session).
+
+---
+
+## `GET /api/mobile/access-handoff?state=<state>`
+
+Used by the mobile apps to get a Cloudflare Access token. See [Cloudflare Access & Tunnel → Mobile apps](/doc/cloudflare#mobile-apps).
+
+**Response `302`** to `minicam://access-callback?state=<state>#token=<Access JWT>` (`Cache-Control: no-store`). **`400`** if `state` isn't 32-128 characters of `[A-Za-z0-9_-]`. **`403`** on LAN, if Access isn't configured, or if the `Cf-Access-Jwt-Assertion` header is missing or invalid.
 
 ---
 

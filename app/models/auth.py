@@ -52,3 +52,10 @@ class CameraPermissionPublic(BaseModel):
     camera_name: str
     can_view: bool
     can_use_ptz: bool
+
+
+class ViewableCamera(BaseModel):
+    """A camera the caller can view, for native clients (GET /api/me/cameras)."""
+
+    name: str
+    can_use_ptz: bool

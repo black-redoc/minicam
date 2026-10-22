@@ -83,6 +83,18 @@ GET /api/auth/permissions?user_id=2
 
 Lists every camera permission granted to that user.
 
+### Listing your own cameras
+
+```
+GET /api/me/cameras
+```
+
+Any signed-in user. Returns the cameras they can view, in config order, with whether they can also use PTZ — the JSON form of the dashboard's camera list, for native clients.
+
+```json
+[{ "name": "entrada", "can_use_ptz": true }]
+```
+
 ## Managing Users (admin-only)
 
 There is no self-service signup — every account is created by an existing admin. The only exception is the very first account, created through first-run setup (see [Bootstrapping](#bootstrapping)).

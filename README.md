@@ -62,7 +62,8 @@ main.py                 App entry point: lifespan starts each camera's RTSP
                         capture, PTZ service and detection worker; mounts routers
 app/
   routers/              HTTP/WebSocket endpoints: auth, dashboard, stream, ptz,
-                        setup (cameras, detection, model catalog), health, docs
+                        setup (cameras, detection, model catalog), health, docs,
+                        mobile (JSON camera list, Access handoff)
   services/             Camera capture/decoding, JPEG encoding, ONVIF PTZ and
                         discovery, auth, authorization, LAN/WAN classification,
                         Cloudflare Access verification, stream tokens,

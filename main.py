@@ -14,6 +14,7 @@ from app.routers import auth as auth_router
 from app.routers import dashboard
 from app.routers import docs as docs_router
 from app.routers import health as health_router
+from app.routers import mobile as mobile_router
 from app.routers import notifications as notifications_router
 from app.routers import ptz as ptz_router
 from app.routers import setup as setup_router
@@ -115,4 +116,5 @@ app.include_router(ptz_router.router)
 app.include_router(setup_router.router)
 app.include_router(docs_router.router)
 app.include_router(health_router.router)
+app.include_router(mobile_router.router)
 app.include_router(notifications_router.router)

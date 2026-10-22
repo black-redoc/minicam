@@ -23,6 +23,7 @@ from app.db.connection import apply_migrations
 from app.dependencies import get_db_connection, get_network_zone
 from app.routers import auth as auth_router
 from app.routers import dashboard as dashboard_router
+from app.routers import mobile as mobile_router
 from app.routers import ptz as ptz_router
 from app.routers import setup as setup_router
 from app.routers import stream as stream_router
@@ -55,6 +56,7 @@ def app(db_connection: aiosqlite.Connection) -> FastAPI:
     test_app.mount("/static", StaticFiles(directory="app/static"), name="static")
     test_app.include_router(auth_router.router)
     test_app.include_router(dashboard_router.router)
+    test_app.include_router(mobile_router.router)
     test_app.include_router(stream_router.router)
     test_app.include_router(ptz_router.router)
     test_app.include_router(setup_router.router)

@@ -74,3 +74,15 @@ class TestListViewableCameraNames:
         repo.list_for_user.return_value = []
         service = AuthorizationService(repo)
         assert await service.list_viewable_camera_names(1) == []
+
+
+class TestListViewablePermissions:
+    async def test_returns_only_viewable_permissions(self) -> None:
+        repo = AsyncMock()
+        viewable = CameraPermission(1, 1, "cam1", True, True, "t")
+        repo.list_for_user.return_value = [
+            viewable,
+            CameraPermission(2, 1, "cam2", False, True, "t"),
+        ]
+        service = AuthorizationService(repo)
+        assert await service.list_viewable_permissions(1) == [viewable]
