@@ -18,6 +18,11 @@ class AuthorizationService:
         permission = await self._permission_repository.get(user_id, camera_name)
         return permission is not None and permission.can_use_ptz
 
+    async def can_listen(self, user_id: int, camera_name: str) -> bool:
+        """Hearing a camera's audio also requires being able to view it."""
+        permission = await self._permission_repository.get(user_id, camera_name)
+        return permission is not None and permission.can_view and permission.can_listen
+
     async def list_viewable_permissions(self, user_id: int) -> list[CameraPermission]:
         permissions = await self._permission_repository.list_for_user(user_id)
         return [p for p in permissions if p.can_view]

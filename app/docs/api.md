@@ -233,7 +233,7 @@ Requires a session (any role). Lists the cameras the caller has `can_view` on, i
 
 **Response `200`:**
 ```json
-[{ "name": "entrada", "can_use_ptz": true }]
+[{ "name": "entrada", "can_use_ptz": true, "can_listen": false }]
 ```
 
 **Response `401`** (no session).
@@ -254,10 +254,12 @@ Requires a session with `can_view` on `camera_name` (and, off-LAN, an active WAN
 
 **Response `200`:**
 ```json
-{ "token": "<jwt>", "expires_in": 30, "video_mime": "video/mp4; codecs=\"hvc1.1.6.L90\"" }
+{ "token": "<jwt>", "expires_in": 30, "video_mime": "video/mp4; codecs=\"hvc1.1.6.L90\"", "audio_mime": null }
 ```
 
-`video_mime` is the camera's live video codec for `format=fmp4`, or `null` while it isn't known yet.
+`video_mime` is the camera's live video codec for `format=fmp4`, or `null` while it isn't known yet. `audio_mime` is the same stream with the camera's audio (e.g. `codecs="hvc1.1.6.L90,mp4a.40.2"`): `null` unless the camera sends AAC audio and the caller has `can_listen`.
+
+`?audio=true` issues a token that also authorizes the camera's audio (`WS ...&format=fmp4&audio=true`). It requires `can_listen`: **`403`** otherwise.
 
 **Response `401`** (no session) / **`403`** (WAN access gate closed) / **`404`** (no `can_view` permission on this camera). See [Video Streaming](/doc/stream) for the full handshake and the `WS /ws/stream/{camera_name}?token=` endpoint.
 

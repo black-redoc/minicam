@@ -7,12 +7,13 @@ from typing import cast
 
 from app.services.live.feed import LiveFeed
 from app.services.live.fmp4 import Fmp4Segmenter, Fragment, InitSegment
-from app.services.recording.packets import EncodedPacket
+from app.services.recording.packets import EncodedPacket, PacketKind
 
 INIT = InitSegment('video/mp4; codecs="avc1.64001f"', b"init")
+AUDIO_INIT = InitSegment('video/mp4; codecs="avc1.64001f,mp4a.40.2"', b"init+audio")
 
 
-def packet(n: int, keyframe: bool = False) -> EncodedPacket:
+def packet(n: int, keyframe: bool = False, kind: PacketKind = "video") -> EncodedPacket:
     return EncodedPacket(
         data=bytes([n]),
         pts=n,
@@ -20,6 +21,7 @@ def packet(n: int, keyframe: bool = False) -> EncodedPacket:
         time_base=Fraction(1, 10),
         is_keyframe=keyframe,
         received_at=float(n),
+        kind=kind,
     )
 
 
@@ -27,7 +29,8 @@ class FakeSegmenter:
     """Emits the init segment on the first push and one fragment per packet
     (without FFmpeg's one-frame delay, which test_fmp4 covers)."""
 
-    def __init__(self) -> None:
+    def __init__(self, init: InitSegment = INIT) -> None:
+        self._init = init
         self.init: InitSegment | None = None
         self.closed = False
         self.fail_push = False
@@ -36,7 +39,7 @@ class FakeSegmenter:
     def push(self, packet: EncodedPacket) -> list[Fragment]:
         if self.fail_push:
             raise RuntimeError("mux failed")
-        self.init = INIT
+        self.init = self._init
         return [Fragment(packet.data, packet.is_keyframe)]
 
     def close(self) -> None:
@@ -45,7 +48,13 @@ class FakeSegmenter:
             raise RuntimeError("close failed")
 
 
-def open_feed(feed: LiveFeed) -> FakeSegmenter:
+def open_feed(feed: LiveFeed, audio: bool = False) -> FakeSegmenter:
+    """Open feed's stream; with audio, the video+audio rendition too
+    (its segmenter, not returned, emits AUDIO_INIT)."""
     segmenter = FakeSegmenter()
-    feed.on_stream_opened(lambda: cast(Fmp4Segmenter, segmenter))
+    audio_segmenter = FakeSegmenter(AUDIO_INIT)
+    feed.on_stream_opened(
+        lambda: cast(Fmp4Segmenter, segmenter),
+        (lambda: cast(Fmp4Segmenter, audio_segmenter)) if audio else None,
+    )
     return segmenter

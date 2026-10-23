@@ -39,6 +39,7 @@ class CameraPermission:
     can_view: bool
     can_use_ptz: bool
     created_at: str
+    can_listen: bool = False
 
 
 @dataclass(frozen=True, slots=True)

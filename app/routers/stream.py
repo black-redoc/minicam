@@ -8,12 +8,21 @@ import weakref
 from typing import Any, Literal
 
 import numpy as np
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 
 from app import state
 from app.buffers.frame_buffer import FrameBuffer
 from app.dependencies import (
     enforce_wan_access_gate,
+    get_authorization_service,
     get_stream_token_service,
     require_can_view,
 )
@@ -21,6 +30,7 @@ from app.models.auth import StreamTokenResponse
 from app.models.domain import User
 from app.models.frame import Frame
 from app.security_settings import SecuritySettings, get_security_settings
+from app.services.authorization import AuthorizationService
 from app.services.detection.base import Detection
 from app.services.detection.draw import color_for_class, draw_detections
 from app.services.encoder import encode_jpeg
@@ -86,22 +96,30 @@ def _render_frame(camera_name: str, frame: Frame) -> bytes:
 @router.post("/api/stream/{camera_name}/token", response_model=StreamTokenResponse)
 async def issue_stream_token(
     camera_name: str,
+    audio: bool = False,
     user: User = Depends(require_can_view),
     _wan_gate: None = Depends(enforce_wan_access_gate),
     stream_token_service: StreamTokenService = Depends(get_stream_token_service),
+    authorization_service: AuthorizationService = Depends(get_authorization_service),
     settings: SecuritySettings = Depends(get_security_settings),
 ) -> StreamTokenResponse:
     """Issue a short-lived token authorizing one WebSocket handshake for
     this camera. Requires can_view and, on WAN, an active WAN access gate.
+
+    audio=true also authorizes the camera's audio, and requires can_listen.
     """
+    can_listen = await authorization_service.can_listen(user.id, camera_name)
+    if audio and not can_listen:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not allowed to listen")
     token = stream_token_service.issue(
-        user.id, camera_name, settings.stream_token_ttl_seconds
+        user.id, camera_name, settings.stream_token_ttl_seconds, audio=audio
     )
     feed = state.live_feeds.get(camera_name)
     return StreamTokenResponse(
         token=token,
         expires_in=settings.stream_token_ttl_seconds,
         video_mime=feed.mime if feed is not None else None,
+        audio_mime=feed.audio_mime if feed is not None and can_listen else None,
     )
 
 
@@ -111,12 +129,14 @@ async def stream(
     camera_name: str,
     token: str = Query(...),
     stream_token_service: StreamTokenService = Depends(get_stream_token_service),
-    format: Literal["mjpeg", "fmp4"] = Query("mjpeg"),
+    format: Literal["mjpeg", "fmp4"] = "mjpeg",
+    audio: bool = False,
 ) -> None:
     """Stream the camera to the browser over WebSocket.
 
     format=fmp4 sends the camera's own compressed video as fragmented MP4
-    (see _stream_fmp4). The default, format=mjpeg, waits on the FrameBuffer
+    (see _stream_fmp4), with the camera's audio too if audio=true and the
+    token was issued for audio. The default, format=mjpeg, waits on the FrameBuffer
     registered for camera_name and sends each new frame as binary JPEG;
     frames this viewer was too slow for are skipped.
     Every frame is encoded once per camera and shared by all its viewers
@@ -128,9 +148,13 @@ async def stream(
     camera, or if camera_name is not registered.
     """
     try:
-        stream_token_service.verify(token, camera_name)
+        payload = stream_token_service.verify(token, camera_name)
     except InvalidStreamTokenError:
         logger.warning("Stream rejected — invalid stream token: camera=%s", camera_name)
+        await websocket.close(code=1008)
+        return
+    if audio and (not payload.audio or format != "fmp4"):
+        logger.warning("Stream rejected — audio not authorized: camera=%s", camera_name)
         await websocket.close(code=1008)
         return
 
@@ -148,14 +172,15 @@ async def stream(
 
     await websocket.accept()
     logger.info(
-        "Stream client connected: camera=%s client=%s format=%s",
+        "Stream client connected: camera=%s client=%s format=%s audio=%s",
         camera_name,
         websocket.client,
         format,
+        audio,
     )
     try:
         if feed is not None and format == "fmp4":
-            await _stream_fmp4(websocket, camera_name, feed)
+            await _stream_fmp4(websocket, camera_name, feed, audio)
         else:
             await _stream_mjpeg(websocket, camera_name, buf)
     except WebSocketDisconnect as exc:
@@ -180,8 +205,11 @@ async def _stream_mjpeg(
         last_frame = frame
 
 
-async def _stream_fmp4(websocket: WebSocket, camera_name: str, feed: LiveFeed) -> None:
-    """Send the camera's own video as fragmented MP4, plus its detections.
+async def _stream_fmp4(
+    websocket: WebSocket, camera_name: str, feed: LiveFeed, audio: bool = False
+) -> None:
+    """Send the camera's own video (and audio, if asked) as fragmented MP4,
+    plus its detections. Without audio=True no audio is ever sent.
 
     Messages, in order: a JSON text {"type": "init", "mime": ...} followed
     by the binary init segment (again whenever the camera reconnects), then
@@ -191,7 +219,7 @@ async def _stream_fmp4(websocket: WebSocket, camera_name: str, feed: LiveFeed) -
     once the camera is removed or renamed.
     """
     sent_detections: dict[str, Any] | None = None
-    with feed.subscribe() as subscription:
+    with feed.subscribe(audio=audio) as subscription:
         while state.live_feeds.get(camera_name) is feed:
             try:
                 message = await asyncio.wait_for(

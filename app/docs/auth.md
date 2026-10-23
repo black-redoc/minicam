@@ -54,8 +54,9 @@ Access to a specific camera is **deny-by-default**: a user can view or PTZ-contr
 |------------|---------|
 | `can_view` | Seeing the camera on the dashboard, and minting a stream token (`POST /api/stream/{camera_name}/token`) |
 | `can_use_ptz` | Sending PTZ commands (`POST /api/ptz/{camera_name}/{action}`) |
+| `can_listen` | Hearing the camera's microphone in the live view (a stream token with `audio=true`). Only takes effect together with `can_view` |
 
-`can_use_ptz` does **not** imply `can_view` or vice versa — they're independent flags on the same row.
+`can_use_ptz` does **not** imply `can_view` or vice versa — they're independent flags on the same row. `can_listen` is off for every grant unless an admin turns it on (the **Listen** column on `/admin`): audio can carry conversations, so it is never implied by `can_view`.
 
 When a user lacks a permission, the response is **`404`**, not `403` — a user without access must not be able to tell whether the camera exists at all.
 
@@ -67,14 +68,14 @@ POST /api/auth/permissions
 
 **Request body:**
 ```json
-{ "user_id": 2, "camera_name": "entrada", "can_view": true, "can_use_ptz": false }
+{ "user_id": 2, "camera_name": "entrada", "can_view": true, "can_use_ptz": false, "can_listen": false }
 ```
 
 Upserts the permission row for that `(user_id, camera_name)` pair.
 
 **Response `200`:**
 ```json
-{ "user_id": 2, "camera_name": "entrada", "can_view": true, "can_use_ptz": false }
+{ "user_id": 2, "camera_name": "entrada", "can_view": true, "can_use_ptz": false, "can_listen": false }
 ```
 
 ```
@@ -89,10 +90,10 @@ Lists every camera permission granted to that user.
 GET /api/me/cameras
 ```
 
-Any signed-in user. Returns the cameras they can view, in config order, with whether they can also use PTZ — the JSON form of the dashboard's camera list, for native clients.
+Any signed-in user. Returns the cameras they can view, in config order, with whether they can also use PTZ and hear its audio — the JSON form of the dashboard's camera list, for native clients.
 
 ```json
-[{ "name": "entrada", "can_use_ptz": true }]
+[{ "name": "entrada", "can_use_ptz": true, "can_listen": false }]
 ```
 
 ## Managing Users (admin-only)

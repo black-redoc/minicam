@@ -71,6 +71,7 @@ async def test_full_admin_bootstrap_and_permission_grant_journey(
             "camera_name": "office12",
             "can_view": True,
             "can_use_ptz": True,
+            "can_listen": False,
         },
     )
     assert grant_res.status_code == 200
@@ -83,6 +84,7 @@ async def test_full_admin_bootstrap_and_permission_grant_journey(
             "camera_name": "office12",
             "can_view": True,
             "can_use_ptz": True,
+            "can_listen": False,
         }
     ]
 

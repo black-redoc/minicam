@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from fractions import Fraction
+
 import av
 from av.container import OutputContainer
+from av.stream import Stream
 from av.video.stream import VideoStream
 
-from app.services.recording.packets import EncodedPacket
+from app.services.recording.packets import EncodedPacket, PacketKind
 
 # MP4 sample entry per codec, where FFmpeg's default isn't one every browser
 # plays: Safari refuses HEVC tagged "hev1" and only plays "hvc1".
@@ -28,13 +31,20 @@ class Remuxer:
     MP4 rejects a packet whose DTS doesn't increase, which would abort the
     whole clip. Cameras occasionally send a repeated or missing timestamp,
     so such a packet is nudged forward by one tick instead.
+
+    With an audio stream in the output, both streams share one origin: the
+    first video packet's time, in seconds. Audio must already be on the
+    video's clock (see AudioClockAligner); audio from before the origin is
+    dropped, as is any packet whose kind has no stream in the output.
     """
 
     def __init__(self, output: OutputContainer) -> None:
         self._output = output
-        self._stream = output.streams.video[0]
-        self._origin: int | None = None
-        self._last_dts: int | None = None
+        self._streams: dict[PacketKind, Stream] = {"video": output.streams.video[0]}
+        if output.streams.audio:
+            self._streams["audio"] = output.streams.audio[0]
+        self._origin: Fraction | None = None
+        self._last_dts: dict[PacketKind, int] = {}
         self._first_pts: int | None = None
         self._max_pts: int | None = None
         self._time_base = 0.0
@@ -42,21 +52,29 @@ class Remuxer:
 
     @property
     def duration_seconds(self) -> float:
+        """Span of the video packets muxed so far."""
         if self._first_pts is None or self._max_pts is None:
             return 0.0
         return (self._max_pts - self._first_pts) * self._time_base
 
     def mux(self, packet: EncodedPacket) -> None:
+        stream = self._streams.get(packet.kind)
         dts = packet.dts if packet.dts is not None else packet.pts
-        if dts is None:
-            return  # no timestamp at all: can't be placed in the file
+        if stream is None or dts is None:
+            return  # no stream for it, or no timestamp: can't be placed
         if self._origin is None:
-            self._origin = dts
+            if packet.kind != "video":
+                return  # the timeline starts with the video
+            self._origin = dts * packet.time_base
             self._time_base = float(packet.time_base)
-        dts -= self._origin
-        if self._last_dts is not None and dts <= self._last_dts:
-            dts = self._last_dts + 1
-        pts = packet.pts - self._origin if packet.pts is not None else dts
+        origin = round(self._origin / packet.time_base)
+        dts -= origin
+        if dts < 0 and packet.kind == "audio":
+            return
+        last_dts = self._last_dts.get(packet.kind)
+        if last_dts is not None and dts <= last_dts:
+            dts = last_dts + 1
+        pts = packet.pts - origin if packet.pts is not None else dts
         pts = max(pts, dts)
 
         out = av.Packet(packet.data)
@@ -64,10 +82,18 @@ class Remuxer:
         out.pts = pts
         out.time_base = packet.time_base
         out.is_keyframe = packet.is_keyframe
-        out.stream = self._stream
+        if packet.duration is not None:
+            # Without it, a fragment flushed before the stream's next packet
+            # arrives would give its sample a zero duration: a gap in the
+            # browser's buffer that stalls playback.
+            out.duration = packet.duration
+        out.stream = stream
         self._output.mux(out)
 
-        self._last_dts = dts
-        self._first_pts = pts if self._first_pts is None else min(self._first_pts, pts)
-        self._max_pts = pts if self._max_pts is None else max(self._max_pts, pts)
+        self._last_dts[packet.kind] = dts
         self.count += 1
+        if packet.kind == "video":
+            self._first_pts = (
+                pts if self._first_pts is None else min(self._first_pts, pts)
+            )
+            self._max_pts = pts if self._max_pts is None else max(self._max_pts, pts)

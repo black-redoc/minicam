@@ -278,15 +278,20 @@ async def set_permission(
     body: SetPermissionRequest,
     permission_repository: PermissionRepository = Depends(get_permission_repository),
 ) -> CameraPermissionPublic:
-    """Grant or update a user's view/PTZ permission for a single camera."""
+    """Grant or update a user's view/PTZ/listen permission for one camera."""
     permission = await permission_repository.upsert(
-        body.user_id, body.camera_name, body.can_view, body.can_use_ptz
+        body.user_id,
+        body.camera_name,
+        body.can_view,
+        body.can_use_ptz,
+        body.can_listen,
     )
     return CameraPermissionPublic(
         user_id=permission.user_id,
         camera_name=permission.camera_name,
         can_view=permission.can_view,
         can_use_ptz=permission.can_use_ptz,
+        can_listen=permission.can_listen,
     )
 
 
@@ -307,6 +312,7 @@ async def list_permissions(
             camera_name=p.camera_name,
             can_view=p.can_view,
             can_use_ptz=p.can_use_ptz,
+            can_listen=p.can_listen,
         )
         for p in permissions
     ]

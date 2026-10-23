@@ -108,6 +108,7 @@ async def test_admin_can_create_user_and_grant_camera_permission(
             "camera_name": "cam1",
             "can_view": True,
             "can_use_ptz": False,
+            "can_listen": False,
         },
     )
     assert perm_res.status_code == 200
@@ -116,6 +117,7 @@ async def test_admin_can_create_user_and_grant_camera_permission(
         "camera_name": "cam1",
         "can_view": True,
         "can_use_ptz": False,
+        "can_listen": False,
     }
 
 
@@ -172,6 +174,7 @@ async def test_admin_can_list_users_and_their_permissions(
             "camera_name": "cam1",
             "can_view": True,
             "can_use_ptz": True,
+            "can_listen": False,
         },
     )
 
@@ -188,6 +191,7 @@ async def test_admin_can_list_users_and_their_permissions(
             "camera_name": "cam1",
             "can_view": True,
             "can_use_ptz": True,
+            "can_listen": False,
         }
     ]
 

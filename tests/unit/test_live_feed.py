@@ -11,6 +11,7 @@ import pytest
 from app.services.live import feed as feed_module
 from app.services.live.feed import LiveFeed, LiveMessage, LiveSubscription
 from app.services.live.fmp4 import Fragment
+from tests.fixtures.live import AUDIO_INIT
 from tests.fixtures.live import INIT as _INIT
 from tests.fixtures.live import open_feed as _open_feed
 from tests.fixtures.live import packet as _packet
@@ -201,8 +202,56 @@ def test_close_error_is_logged(caplog: pytest.LogCaptureFixture) -> None:
 async def test_closed_loop_does_not_break_the_capture_thread() -> None:
     feed = LiveFeed()
     _open_feed(feed)
-    with feed.subscribe():
+    with feed.subscribe() as subscription:
         loop = MagicMock()
         loop.call_soon_threadsafe.side_effect = RuntimeError("loop closed")
-        feed._loop = loop
+        feed._video._loop = loop
         feed.on_packet(_packet(1, keyframe=True))  # must not raise
+        loop.call_soon_threadsafe.assert_called()
+    assert _drain(subscription) == []
+
+
+async def test_audio_rendition_carries_audio_only_to_its_viewers() -> None:
+    feed = LiveFeed()
+    _open_feed(feed, audio=True)
+    with feed.subscribe() as video_only, feed.subscribe(audio=True) as with_audio:
+        # Every AAC packet is a keyframe: neither rendition may start on one.
+        feed.on_packet(_packet(1, keyframe=True, kind="audio"))
+        feed.on_packet(_packet(2, keyframe=True))
+        feed.on_packet(_packet(3, keyframe=True, kind="audio"))
+        feed.on_packet(_packet(4))
+        await _settle()
+
+        assert _payloads(_drain(video_only)) == [b"init", b"\x02", b"\x04"]
+        assert _payloads(_drain(with_audio)) == [
+            b"init+audio",
+            b"\x02",
+            b"\x03",
+            b"\x04",
+        ]
+    assert feed.mime == _INIT.mime
+    assert feed.audio_mime == AUDIO_INIT.mime
+
+
+async def test_audio_fragments_are_not_gop_starts() -> None:
+    feed = LiveFeed()
+    _open_feed(feed, audio=True)
+    feed.on_packet(_packet(1, keyframe=True))
+    feed.on_packet(_packet(2, keyframe=False, kind="audio"))
+    feed.on_packet(_packet(3))
+    with feed.subscribe(audio=True) as subscription:
+        assert _payloads(_drain(subscription)) == [
+            b"init+audio",
+            b"\x01",
+            b"\x02",
+            b"\x03",
+        ]
+
+
+def test_camera_without_audio_has_no_audio_mime() -> None:
+    feed = LiveFeed()
+    _open_feed(feed)
+    feed.on_packet(_packet(1, keyframe=True))
+    feed.on_packet(_packet(2, kind="audio"))
+    assert feed.mime == _INIT.mime
+    assert feed.audio_mime is None

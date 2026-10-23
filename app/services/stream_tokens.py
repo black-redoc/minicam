@@ -1,7 +1,8 @@
 """Short-lived, stateless tokens that authorize a single WebSocket handshake.
 
 Distinct from the session JWT (TokenService) on purpose: a stream token is
-bound to one camera via the `camera` claim, carries a short TTL (~30s, see
+bound to one camera via the `camera` claim (and, with the `audio` claim,
+lets the socket carry that camera's audio), carries a short TTL (~30s, see
 security_settings.stream_token_ttl_seconds), and is never checked against the
 sessions table — once the handshake succeeds the socket stays open even if
 the token has since expired, the same trust model as a signed S3 URL.
@@ -28,6 +29,7 @@ class InvalidStreamTokenError(Exception):
 class StreamTokenPayload:
     user_id: int
     camera_name: str
+    audio: bool = False
 
 
 class StreamTokenService:
@@ -35,15 +37,20 @@ class StreamTokenService:
         self._secret = secret
         self._algorithm = algorithm
 
-    def issue(self, user_id: int, camera_name: str, ttl_seconds: int) -> str:
+    def issue(
+        self, user_id: int, camera_name: str, ttl_seconds: int, audio: bool = False
+    ) -> str:
+        """audio=True authorizes the camera's audio: only for can_listen."""
         now = int(time.time())
-        payload = {
+        payload: dict[str, object] = {
             "sub": str(user_id),
             "camera": camera_name,
             "typ": _STREAM_TOKEN_TYPE,
             "iat": now,
             "exp": now + ttl_seconds,
         }
+        if audio:
+            payload["audio"] = True
         return jwt.encode(payload, self._secret, algorithm=self._algorithm)
 
     def verify(self, token: str, camera_name: str) -> StreamTokenPayload:
@@ -59,5 +66,7 @@ class StreamTokenService:
             raise InvalidStreamTokenError("Token was issued for a different camera")
 
         return StreamTokenPayload(
-            user_id=int(payload["sub"]), camera_name=payload["camera"]
+            user_id=int(payload["sub"]),
+            camera_name=payload["camera"],
+            audio=payload.get("audio") is True,
         )

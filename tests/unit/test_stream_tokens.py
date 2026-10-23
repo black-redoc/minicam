@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import time
+
+import jwt
 import pytest
 
 from app.services.auth import TokenService
@@ -46,3 +49,30 @@ class TestStreamTokenIssueAndVerify:
         token = issuer.issue(user_id=7, camera_name="cam1", ttl_seconds=30)
         with pytest.raises(InvalidStreamTokenError):
             verifier.verify(token, camera_name="cam1")
+
+
+class TestStreamTokenAudioClaim:
+    def test_tokens_carry_no_audio_by_default(self) -> None:
+        service = StreamTokenService(secret="test-secret")
+        token = service.issue(user_id=7, camera_name="cam1", ttl_seconds=30)
+        assert service.verify(token, camera_name="cam1").audio is False
+
+    def test_audio_claim_round_trips(self) -> None:
+        service = StreamTokenService(secret="test-secret")
+        token = service.issue(user_id=7, camera_name="cam1", ttl_seconds=30, audio=True)
+        assert service.verify(token, camera_name="cam1").audio is True
+
+    def test_only_a_true_audio_claim_counts(self) -> None:
+        service = StreamTokenService(secret="test-secret")
+        token = jwt.encode(
+            {
+                "sub": "7",
+                "camera": "cam1",
+                "typ": "stream",
+                "audio": "yes",
+                "exp": int(time.time()) + 30,
+            },
+            "test-secret",
+            algorithm="HS256",
+        )
+        assert service.verify(token, camera_name="cam1").audio is False

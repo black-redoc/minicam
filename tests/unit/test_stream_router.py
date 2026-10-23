@@ -5,11 +5,13 @@ import numpy as np
 import pytest
 from fastapi import FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
+from httpx import Response
 
 import app.state as state_module
 from app.buffers.frame_buffer import FrameBuffer
 from app.dependencies import (
     enforce_wan_access_gate,
+    get_authorization_service,
     get_db_connection,
     get_security_settings,
     get_stream_token_service,
@@ -23,7 +25,7 @@ from app.services.detection.base import Detection
 from app.services.detection.worker import DetectionSnapshot
 from app.services.live.feed import LiveFeed
 from app.services.stream_tokens import InvalidStreamTokenError, StreamTokenPayload
-from tests.fixtures.live import INIT, open_feed, packet
+from tests.fixtures.live import AUDIO_INIT, INIT, open_feed, packet
 
 _USER = User(
     id=1,
@@ -301,6 +303,9 @@ class TestIssueStreamToken:
         test_app = FastAPI()
         test_app.include_router(stream_router.router)
         test_app.dependency_overrides[get_db_connection] = lambda: MagicMock()
+        self.authz = MagicMock()
+        self.authz.can_listen = AsyncMock(return_value=False)
+        test_app.dependency_overrides[get_authorization_service] = lambda: self.authz
         return test_app
 
     def test_requires_can_view(self, app: FastAPI) -> None:
@@ -325,9 +330,10 @@ class TestIssueStreamToken:
             "token": "signed.jwt.token",
             "expires_in": _SETTINGS.stream_token_ttl_seconds,
             "video_mime": None,
+            "audio_mime": None,
         }
         stream_token_service.issue.assert_called_once_with(
-            _USER.id, "cam1", _SETTINGS.stream_token_ttl_seconds
+            _USER.id, "cam1", _SETTINGS.stream_token_ttl_seconds, audio=False
         )
 
     def test_returns_403_when_wan_gate_blocks(self, app: FastAPI) -> None:
@@ -471,8 +477,122 @@ class TestStreamTokenVideoMime:
         token_service.issue.return_value = "signed.jwt.token"
         app.dependency_overrides[get_stream_token_service] = lambda: token_service
         app.dependency_overrides[get_security_settings] = lambda: _SETTINGS
+        authz = MagicMock()
+        authz.can_listen = AsyncMock(return_value=False)
+        app.dependency_overrides[get_authorization_service] = lambda: authz
         try:
             res = TestClient(app).post("/api/stream/cam1/token")
         finally:
             state_module.live_feeds.clear()
         assert res.json()["video_mime"] == INIT.mime
+
+
+def _app_with_token(audio: bool) -> FastAPI:
+    service = MagicMock()
+    service.verify.return_value = StreamTokenPayload(
+        user_id=1, camera_name="cam1", audio=audio
+    )
+    test_app = FastAPI()
+    test_app.include_router(stream_router.router)
+    test_app.dependency_overrides[get_stream_token_service] = lambda: service
+    return test_app
+
+
+class TestWebSocketStreamAudio:
+    def setup_method(self) -> None:
+        state_module.frame_buffers["cam1"] = _buffer_with(_make_frame(sequence=1))
+        self.feed = LiveFeed()
+        state_module.live_feeds["cam1"] = self.feed
+        open_feed(self.feed, audio=True)
+        self.feed.on_packet(packet(1, keyframe=True))
+
+    def teardown_method(self) -> None:
+        state_module.frame_buffers.clear()
+        state_module.live_feeds.clear()
+
+    def test_audio_token_gets_the_rendition_with_audio(self) -> None:
+        with (
+            TestClient(_app_with_token(audio=True)) as client,
+            client.websocket_connect(
+                "/ws/stream/cam1?token=t&format=fmp4&audio=true"
+            ) as ws,
+        ):
+            assert ws.receive_json() == {"type": "init", "mime": AUDIO_INIT.mime}
+            assert ws.receive_bytes() == AUDIO_INIT.data
+            ws.receive_json()
+            self.feed.on_packet(packet(2, kind="audio"))
+            assert ws.receive_bytes() == b"\x01"
+            assert ws.receive_bytes() == b"\x02"
+
+    def test_without_audio_requested_no_audio_is_sent(self) -> None:
+        with (
+            TestClient(_app_with_token(audio=True)) as client,
+            client.websocket_connect("/ws/stream/cam1?token=t&format=fmp4") as ws,
+        ):
+            assert ws.receive_json() == {"type": "init", "mime": INIT.mime}
+
+    @pytest.mark.parametrize(
+        ("audio_claim", "query"),
+        [
+            (False, "format=fmp4&audio=true"),  # token not issued for audio
+            (True, "audio=true"),  # MJPEG has no audio
+        ],
+    )
+    def test_unauthorized_audio_is_rejected(
+        self, audio_claim: bool, query: str
+    ) -> None:
+        client = TestClient(_app_with_token(audio=audio_claim))
+        with (
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            client.websocket_connect(f"/ws/stream/cam1?token=t&{query}") as ws,
+        ):
+            ws.receive_bytes()
+        assert exc_info.value.code == 1008
+
+
+class TestStreamTokenAudio:
+    def setup_method(self) -> None:
+        self.feed = LiveFeed()
+        open_feed(self.feed, audio=True)
+        self.feed.on_packet(packet(1, keyframe=True))
+        state_module.live_feeds["cam1"] = self.feed
+        self.token_service = MagicMock()
+        self.token_service.issue.return_value = "signed.jwt.token"
+        self.authz = MagicMock()
+        self.app = FastAPI()
+        self.app.include_router(stream_router.router)
+        self.app.dependency_overrides[require_can_view] = lambda: _USER
+        self.app.dependency_overrides[enforce_wan_access_gate] = lambda: None
+        self.app.dependency_overrides[get_stream_token_service] = lambda: (
+            self.token_service
+        )
+        self.app.dependency_overrides[get_security_settings] = lambda: _SETTINGS
+        self.app.dependency_overrides[get_authorization_service] = lambda: self.authz
+
+    def teardown_method(self) -> None:
+        state_module.live_feeds.clear()
+
+    def _post(self, can_listen: bool, query: str = "") -> Response:
+        self.authz.can_listen = AsyncMock(return_value=can_listen)
+        response: Response = TestClient(self.app).post(f"/api/stream/cam1/token{query}")
+        return response
+
+    def test_listener_is_told_the_audio_codec(self) -> None:
+        res = self._post(can_listen=True)
+        assert res.json()["audio_mime"] == AUDIO_INIT.mime
+        assert res.json()["video_mime"] == INIT.mime
+
+    def test_audio_codec_is_hidden_without_can_listen(self) -> None:
+        assert self._post(can_listen=False).json()["audio_mime"] is None
+
+    def test_audio_token_requires_can_listen(self) -> None:
+        res = self._post(can_listen=False, query="?audio=true")
+        assert res.status_code == 403
+        self.token_service.issue.assert_not_called()
+
+    def test_audio_token_is_issued_for_listeners(self) -> None:
+        res = self._post(can_listen=True, query="?audio=true")
+        assert res.status_code == 200
+        self.token_service.issue.assert_called_once_with(
+            _USER.id, "cam1", _SETTINGS.stream_token_ttl_seconds, audio=True
+        )

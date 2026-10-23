@@ -24,6 +24,9 @@ class StreamTokenResponse(BaseModel):
     # MIME type with codecs of the camera's own stream (format=fmp4), or
     # None while it isn't known yet: the client then uses MJPEG.
     video_mime: str | None = None
+    # Same, with the camera's audio (format=fmp4&audio=true): None unless
+    # the camera sends supported audio and the caller has can_listen.
+    audio_mime: str | None = None
 
 
 class CreateUserRequest(BaseModel):
@@ -48,6 +51,7 @@ class SetPermissionRequest(BaseModel):
     camera_name: str = Field(..., min_length=1)
     can_view: bool = False
     can_use_ptz: bool = False
+    can_listen: bool = False
 
 
 class SetWanAccessRequest(BaseModel):
@@ -67,6 +71,7 @@ class CameraPermissionPublic(BaseModel):
     camera_name: str
     can_view: bool
     can_use_ptz: bool
+    can_listen: bool
 
 
 class ViewableCamera(BaseModel):
@@ -74,3 +79,4 @@ class ViewableCamera(BaseModel):
 
     name: str
     can_use_ptz: bool
+    can_listen: bool

@@ -15,7 +15,12 @@ class PermissionRepository(Protocol):
     async def list_for_user(self, user_id: int) -> list[CameraPermission]: ...
 
     async def upsert(
-        self, user_id: int, camera_name: str, can_view: bool, can_use_ptz: bool
+        self,
+        user_id: int,
+        camera_name: str,
+        can_view: bool,
+        can_use_ptz: bool,
+        can_listen: bool = False,
     ) -> CameraPermission: ...
 
     async def list_viewer_ids(self, camera_name: str) -> list[int]: ...
@@ -29,6 +34,7 @@ def _row_to_permission(row: aiosqlite.Row) -> CameraPermission:
         can_view=bool(row["can_view"]),
         can_use_ptz=bool(row["can_use_ptz"]),
         created_at=row["created_at"],
+        can_listen=bool(row["can_listen"]),
     )
 
 
@@ -52,18 +58,25 @@ class SQLitePermissionRepository:
         return [_row_to_permission(row) for row in rows]
 
     async def upsert(
-        self, user_id: int, camera_name: str, can_view: bool, can_use_ptz: bool
+        self,
+        user_id: int,
+        camera_name: str,
+        can_view: bool,
+        can_use_ptz: bool,
+        can_listen: bool = False,
     ) -> CameraPermission:
         cursor = await self._conn.execute(
             """
-            INSERT INTO camera_permissions (user_id, camera_name, can_view, can_use_ptz)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO camera_permissions
+                (user_id, camera_name, can_view, can_use_ptz, can_listen)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT (user_id, camera_name)
             DO UPDATE SET can_view = excluded.can_view,
-                          can_use_ptz = excluded.can_use_ptz
+                          can_use_ptz = excluded.can_use_ptz,
+                          can_listen = excluded.can_listen
             RETURNING *
             """,
-            (user_id, camera_name, int(can_view), int(can_use_ptz)),
+            (user_id, camera_name, int(can_view), int(can_use_ptz), int(can_listen)),
         )
         row = await cursor.fetchone()
         await self._conn.commit()

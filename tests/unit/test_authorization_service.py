@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from unittest.mock import AsyncMock
 
 from app.models.domain import CameraPermission
@@ -86,3 +87,28 @@ class TestListViewablePermissions:
         ]
         service = AuthorizationService(repo)
         assert await service.list_viewable_permissions(1) == [viewable]
+
+
+class TestCanListen:
+    @staticmethod
+    def _service(permission: CameraPermission | None) -> AuthorizationService:
+        repo = AsyncMock()
+        repo.get.return_value = permission
+        return AuthorizationService(repo)
+
+    async def test_true_with_view_and_listen(self) -> None:
+        permission = _permission(can_view=True, can_use_ptz=False)
+        service = self._service(dataclasses.replace(permission, can_listen=True))
+        assert await service.can_listen(1, "cam1") is True
+
+    async def test_listen_without_view_is_not_enough(self) -> None:
+        permission = _permission(can_view=False, can_use_ptz=False)
+        service = self._service(dataclasses.replace(permission, can_listen=True))
+        assert await service.can_listen(1, "cam1") is False
+
+    async def test_view_alone_is_not_enough(self) -> None:
+        service = self._service(_permission(can_view=True, can_use_ptz=True))
+        assert await service.can_listen(1, "cam1") is False
+
+    async def test_false_when_no_permission_row(self) -> None:
+        assert await self._service(None).can_listen(1, "cam1") is False

@@ -11,15 +11,16 @@ from typing import TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import av
+from av.audio.stream import AudioStream
 from av.codec.context import Flags
-from av.container import OutputContainer
-from av.video.stream import VideoStream
+from av.container import InputContainer, OutputContainer
 
 from app.buffers.frame_buffer import FrameBuffer
+from app.services.av_clock import AudioClockAligner
 from app.services.av_io import av_io_lock
 from app.services.decoder import decode_video_frame
 from app.services.live.feed import LiveFeed
-from app.services.live.fmp4 import Fmp4Segmenter
+from app.services.live.fmp4 import Fmp4Segmenter, audio_codec_string
 from app.services.recording.packets import EncodedPacket
 from app.services.recording.recorder import CameraRecorder
 from app.services.recording.writer import open_output
@@ -249,21 +250,54 @@ class RTSPCamera:
             # while capping how many threads a single stream can ever hold.
             video_stream.codec_context.thread_type = "SLICE"
             video_stream.codec_context.thread_count = 2
+            # The microphone, if any, only matters for live listening, and
+            # only AAC can be passed through: otherwise it isn't even read.
+            audio_stream = (
+                next(
+                    (
+                        s
+                        for s in self._container.streams
+                        if isinstance(s, AudioStream) and audio_codec_string(s)
+                    ),
+                    None,
+                )
+                if self._live_feed is not None
+                else None
+            )
 
         recorder = self._recorder
         live_feed = self._live_feed
         time_base = cast(Fraction, video_stream.time_base)
+        audio_time_base = (
+            cast(Fraction, audio_stream.time_base) if audio_stream is not None else None
+        )
+        aligner = AudioClockAligner()
         if recorder is not None:
             recorder.on_stream_opened(self._open_clip_output)
         if live_feed is not None:
-            live_feed.on_stream_opened(self._open_live_output)
+            live_feed.on_stream_opened(
+                self._open_live_output,
+                self._open_live_output_with_audio if audio_stream is not None else None,
+            )
+        streams = (
+            [video_stream] if audio_stream is None else [video_stream, audio_stream]
+        )
         try:
             self._connected = True
             logger.info("RTSP stream opened: %s", self._log_url)
 
-            for packet in self._container.demux(video_stream):
+            for packet in self._container.demux(streams):
                 if not self._running:
                     break
+                if audio_stream is not None and packet.stream is audio_stream:
+                    assert live_feed is not None and audio_time_base is not None
+                    audio = EncodedPacket.from_av(
+                        packet, audio_time_base, time.monotonic(), kind="audio"
+                    )
+                    aligned = aligner.align(audio) if audio is not None else None
+                    if aligned is not None:
+                        live_feed.on_packet(aligned)
+                    continue
                 for av_frame in packet.decode():
                     if not self._running:
                         break
@@ -278,6 +312,8 @@ class RTSPCamera:
                 encoded = EncodedPacket.from_av(packet, time_base, time.monotonic())
                 if encoded is None:
                     continue
+                if audio_stream is not None:
+                    aligner.align(encoded)  # video calibrates the audio offset
                 if recorder is not None:
                     recorder.on_packet(encoded)
                 if live_feed is not None:
@@ -293,15 +329,29 @@ class RTSPCamera:
     def _open_clip_output(self, path: Path) -> OutputContainer | None:
         """Open an MP4 output copying the live video stream's codec, or None
         if the input is already closed or the camera is stopping."""
-        return self._with_video_template(lambda template: open_output(path, template))
+        return self._with_input(
+            lambda container: open_output(path, container.streams.video[0])
+        )
 
     def _open_live_output(self) -> Fmp4Segmenter | None:
-        """Open the fMP4 segmenter for live viewing, or None if the input is
-        already closed or the camera is stopping."""
-        return self._with_video_template(Fmp4Segmenter.open)
+        """Open the video-only fMP4 segmenter for live viewing, or None if
+        the input is already closed or the camera is stopping."""
+        return self._with_input(
+            lambda container: Fmp4Segmenter.open(container.streams.video[0])
+        )
 
-    def _with_video_template(self, open_with: Callable[[VideoStream], _T]) -> _T | None:
-        """Run open_with on the input's video stream while it is still open.
+    def _open_live_output_with_audio(self) -> Fmp4Segmenter | None:
+        """Open the fMP4 segmenter with the camera's (AAC) audio, or None if
+        the input is already closed or the camera is stopping."""
+        return self._with_input(
+            lambda container: Fmp4Segmenter.open(
+                container.streams.video[0],
+                next(s for s in container.streams.audio if audio_codec_string(s)),
+            )
+        )
+
+    def _with_input(self, open_with: Callable[[InputContainer], _T]) -> _T | None:
+        """Run open_with on the input container while it is still open.
 
         Called from the capture thread, the only one that closes the input
         container while it runs (see stop()).
@@ -310,4 +360,4 @@ class RTSPCamera:
             container = self._container
             if container is None or not self._running:
                 return None
-            return open_with(container.streams.video[0])
+            return open_with(container)
