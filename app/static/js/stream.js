@@ -258,11 +258,18 @@ class VideoStream {
     #fmp4Failed = false
     // Shown next to the FPS: the codec in fMP4 mode, or "MJPEG".
     #formatLabel = ''
+    /** @type {HTMLButtonElement | null} */
+    #audioButton = null
+    // The viewer turned audio on. Never remembered: every new view of a
+    // camera (connect after disconnect, switchCamera) starts without it.
+    #audioOn = false
 
     #ws = null
     #prevUrl = null
     #frameCount = 0
     #fpsTimestamp = 0
+    // fMP4: the <video>'s decoded-frame count when the FPS window began.
+    #videoFramesBase = 0
     #reconnectTimer = null
     #reconnectDelay = 3000
     // True between connect()/switchCamera() and disconnect().
@@ -281,13 +288,17 @@ class VideoStream {
      * @param {HTMLElement}       [opts.fps]       - Element displaying FPS counter (optional).
      * @param {HTMLElement}       opts.badge       - Status badge element.
      * @param {string}            opts.cameraName  - Initial camera name for the stream URL.
+     * @param {HTMLButtonElement} [opts.audioButton] - Speaker toggle, shown only when
+     *   the camera has audio this viewer may hear and the browser can play.
      */
-    constructor({ img, overlay, fps, badge, cameraName }) {
+    constructor({ img, overlay, fps, badge, cameraName, audioButton }) {
         this.#img        = img;
         this.#overlay    = overlay;
         this.#fpsEl      = fps;
         this.#badgeEl    = badge;
         this.#cameraName = cameraName;
+        this.#audioButton = audioButton ?? null;
+        this.#audioButton?.addEventListener('click', () => this.#toggleAudio());
 
         // The <video> (fMP4) and the boxes canvas sit over the <img>
         // (MJPEG). In fMP4 mode the <img> keeps showing the last frame
@@ -356,11 +367,14 @@ class VideoStream {
         this.#paused = false;
         this.#setStatus('connecting', 'Connecting…');
 
-        let token, videoMime;
+        let token, videoMime, audioMime;
         try {
-            ({ token, video_mime: videoMime } = await this.#fetchStreamToken());
+            ({ token, video_mime: videoMime, audio_mime: audioMime } =
+                await this.#fetchStreamToken(this.#audioOn));
         } catch {
             if (seq !== this.#connectSeq) return;
+            // Audio no longer allowed (can_listen revoked): retry without.
+            this.#audioOn = false;
             // No session, no permission on this camera, or WAN access gate
             // closed — same recovery path as a dropped socket: back off
             // and retry, so it self-heals once the caller logs in / is
@@ -381,14 +395,22 @@ class VideoStream {
             mjpegReason = `browser can't play ${videoMime}`;
         }
         const fmp4 = mjpegReason === null;
-        this.#formatLabel = fmp4 ? codecLabel(videoMime) : 'MJPEG';
-        console.info(`[minicam] ${this.#cameraName}: ${this.#formatLabel} (${fmp4 ? videoMime : mjpegReason})`);
-        if (this.#fpsEl) this.#fpsEl.title = fmp4 ? `fMP4: ${videoMime}` : `MJPEG: ${mjpegReason}`;
+        const audioPlayable = fmp4 && Boolean(audioMime)
+                            && Boolean(MediaSourceImpl.isTypeSupported(audioMime));
+        const audio = this.#audioOn && audioPlayable;
+        this.#audioOn = audio;
+        this.#updateAudioButton(audioPlayable);
+        this.#video.muted = !audio;
+        const mime = audio ? audioMime : videoMime;
+        this.#formatLabel = fmp4 ? codecLabel(mime) + (audio ? ' + audio' : '') : 'MJPEG';
+        console.info(`[minicam] ${this.#cameraName}: ${this.#formatLabel} (${fmp4 ? mime : mjpegReason})`);
+        if (this.#fpsEl) this.#fpsEl.title = fmp4 ? `fMP4: ${mime}` : `MJPEG: ${mjpegReason}`;
 
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const url   = `${proto}//${location.host}/ws/stream/`
                     + `${encodeURIComponent(this.#cameraName)}?token=${encodeURIComponent(token)}`
-                    + (fmp4 ? '&format=fmp4' : '');
+                    + (fmp4 ? '&format=fmp4' : '')
+                    + (audio ? '&audio=true' : '');
 
         this.#showVideo(fmp4);
         const ws = new WebSocket(url);
@@ -420,11 +442,14 @@ class VideoStream {
      * (see POST /api/stream/{camera_name}/token). Distinct from the
      * session cookie — the WS route only accepts this token, by design.
      *
-     * @returns {Promise<{token: string, video_mime: string | null}>}
+     * @param {boolean} audio - Also authorize the camera's audio (can_listen).
+     * @returns {Promise<{token: string, video_mime: string | null,
+     *                    audio_mime: string | null}>}
      */
-    async #fetchStreamToken() {
+    async #fetchStreamToken(audio) {
         const res = await authedFetch(
-            `/api/stream/${encodeURIComponent(this.#cameraName)}/token`,
+            `/api/stream/${encodeURIComponent(this.#cameraName)}/token`
+            + (audio ? '?audio=true' : ''),
             { method: 'POST' },
         );
         if (!res.ok) {
@@ -436,6 +461,8 @@ class VideoStream {
     disconnect() {
         this.#active = false;
         this.#paused = false;
+        this.#audioOn = false;
+        this.#updateAudioButton(false);
         this.#connectSeq++;
         document.removeEventListener('visibilitychange', this.#onVisibilityChange);
         clearTimeout(this.#reconnectTimer);
@@ -454,6 +481,8 @@ class VideoStream {
         this.#overlay.classList.remove('hidden');
         this.#cameraName = name;
         this.#fmp4Failed = false;
+        this.#audioOn = false;
+        this.#updateAudioButton(false);
         this.connect();
     }
 
@@ -503,6 +532,28 @@ class VideoStream {
         if (!fmp4) this.#img.style.display = '';
     }
 
+    #toggleAudio() {
+        this.#audioOn = !this.#audioOn;
+        // Unmuting inside the click lets the browser play sound; the stream
+        // with (or without) audio then replaces the current one.
+        this.#video.muted = !this.#audioOn;
+        this.#updateAudioButton(true);
+        this.connect();
+    }
+
+    /** @param {boolean} visible - The camera has audio this viewer can play. */
+    #updateAudioButton(visible) {
+        const button = this.#audioButton;
+        if (!button) return;
+        button.classList.toggle('hidden', !visible);
+        button.setAttribute('aria-pressed', String(this.#audioOn));
+        const label = this.#audioOn ? 'Turn audio off' : 'Turn audio on';
+        button.setAttribute('aria-label', label);
+        button.title = label;
+        button.querySelector('[data-icon-on]')?.classList.toggle('hidden', !this.#audioOn);
+        button.querySelector('[data-icon-off]')?.classList.toggle('hidden', this.#audioOn);
+    }
+
     /**
      * The browser couldn't play the fMP4 stream: reconnect as MJPEG.
      * @param {WebSocket} ws - The socket the failing player belongs to.
@@ -517,6 +568,7 @@ class VideoStream {
         this.#setStatus('connected', 'Connected');
         this.#frameCount   = 0;
         this.#fpsTimestamp = performance.now();
+        this.#videoFramesBase = this.#decodedVideoFrames();
         if (this.#fpsEl) this.#fpsEl.textContent = `-- FPS · ${this.#formatLabel}`;
     }
 
@@ -535,10 +587,19 @@ class VideoStream {
         this.#frameCount++;
         const now = performance.now();
         if (this.#fpsEl && now - this.#fpsTimestamp >= 1000) {
-            this.#fpsEl.textContent = `${this.#frameCount} FPS · ${this.#formatLabel}`;
+            // fMP4 messages include audio fragments: count the frames the
+            // <video> actually decoded instead.
+            const decoded = this.#decodedVideoFrames();
+            const frames  = this.#player ? decoded - this.#videoFramesBase : this.#frameCount;
+            this.#fpsEl.textContent = `${frames} FPS · ${this.#formatLabel}`;
             this.#frameCount        = 0;
+            this.#videoFramesBase   = decoded;
             this.#fpsTimestamp      = now;
         }
+    }
+
+    #decodedVideoFrames() {
+        return this.#video.getVideoPlaybackQuality?.().totalVideoFrames ?? 0;
     }
 
     #onClose() {

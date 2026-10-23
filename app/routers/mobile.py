@@ -49,7 +49,11 @@ async def list_my_cameras(
         for p in await authorization_service.list_viewable_permissions(user.id)
     }
     return [
-        ViewableCamera(name=cam.name, can_use_ptz=permissions[cam.name].can_use_ptz)
+        ViewableCamera(
+            name=cam.name,
+            can_use_ptz=permissions[cam.name].can_use_ptz,
+            can_listen=permissions[cam.name].can_listen,
+        )
         for cam in get_config().cameras
         if cam.name in permissions
     ]

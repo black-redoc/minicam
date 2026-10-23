@@ -231,6 +231,28 @@
                 <div class="video-spinner"></div>
                 <p class="text-slate-400 text-sm">Connecting to stream…</p>
             </div>
+
+            <!-- Shown by stream.js only when this camera's audio can be played. -->
+            <button id="audio-toggle" type="button"
+                    class="hidden absolute bottom-3 right-3 z-10 flex items-center justify-center
+                           w-9 h-9 rounded-full bg-black/60 text-slate-100 hover:bg-black/80
+                           transition-colors focus:outline-none focus:ring-2 focus:ring-sky-400"
+                    aria-pressed="false" aria-label="Turn audio on" title="Turn audio on">
+                <svg data-icon-off xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" class="w-4 h-4 pointer-events-none">
+                    <path d="M11 5 6 9H2v6h4l5 4V5z"/>
+                    <line x1="23" y1="9" x2="17" y2="15"/>
+                    <line x1="17" y1="9" x2="23" y2="15"/>
+                </svg>
+                <svg data-icon-on xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" class="hidden w-4 h-4 pointer-events-none">
+                    <path d="M11 5 6 9H2v6h4l5 4V5z"/>
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                </svg>
+            </button>
         </div>
 
         <!-- Info bar below video -->
@@ -388,6 +410,7 @@
         fps:        document.getElementById('fps-display'),
         badge:      document.getElementById('status-badge'),
         cameraName: INITIAL_CAMERA,
+        audioButton: /** @type {HTMLButtonElement} */ (document.getElementById('audio-toggle')),
     });
 
     const ptz = initPtz(document.getElementById('ptz-controls'), INITIAL_CAMERA);

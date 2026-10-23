@@ -1,4 +1,4 @@
-"""One camera's live fMP4 stream, shared by every viewer of that camera."""
+"""One camera's live fMP4 streams, shared by every viewer of that camera."""
 
 from __future__ import annotations
 
@@ -27,8 +27,8 @@ _MAX_QUEUED_BYTES = 4 * 1024 * 1024
 class LiveSubscription:
     """One viewer's queue of messages, filled on the event loop."""
 
-    def __init__(self, feed: LiveFeed, max_queued_bytes: int) -> None:
-        self._feed = feed
+    def __init__(self, rendition: _Rendition, max_queued_bytes: int) -> None:
+        self._rendition = rendition
         self._max_queued_bytes = max_queued_bytes
         self._queue: deque[LiveMessage] = deque()
         self._queued_bytes = 0
@@ -39,7 +39,7 @@ class LiveSubscription:
         return self
 
     def __exit__(self, *_exc: object) -> None:
-        self._feed.unsubscribe(self)
+        self._rendition.unsubscribe(self)
 
     async def next(self) -> LiveMessage:
         """Wait for and return the next message."""
@@ -74,16 +74,10 @@ class LiveSubscription:
         self._ready.set()
 
 
-class LiveFeed:
-    """Remuxes one camera's packets into fMP4 and fans them out to viewers.
+class _Rendition:
+    """One fMP4 stream of a camera (video only, or video with audio)."""
 
-    The capture thread calls on_stream_opened/on_packet/on_stream_closed;
-    viewers subscribe on the event loop. A new viewer starts with the init
-    segment and the fragments since the latest keyframe, so playback can
-    begin immediately instead of waiting for the next keyframe.
-    """
-
-    def __init__(self, max_queued_bytes: int = _MAX_QUEUED_BYTES) -> None:
+    def __init__(self, max_queued_bytes: int) -> None:
         self._max_queued_bytes = max_queued_bytes
         # Guards everything a viewer reads when subscribing.
         self._lock = threading.Lock()
@@ -97,11 +91,8 @@ class LiveFeed:
 
     @property
     def mime(self) -> str | None:
-        """MIME type (with codecs) of the current stream, if known yet."""
         init = self._init
         return init.mime if init is not None else None
-
-    # ── Viewers (event loop) ────────────────────────────────────────────
 
     def subscribe(self) -> LiveSubscription:
         subscription = LiveSubscription(self, self._max_queued_bytes)
@@ -118,15 +109,13 @@ class LiveFeed:
         with self._lock:
             self._subscribers.discard(subscription)
 
-    # ── Capture thread ──────────────────────────────────────────────────
-
-    def on_stream_opened(self, opener: SegmenterOpener) -> None:
+    def on_stream_opened(self, opener: SegmenterOpener | None) -> None:
         self._opener = opener
 
     def on_packet(self, packet: EncodedPacket) -> None:
         if self._segmenter is None:
-            # Fragments must start at a keyframe to be playable.
-            if self._opener is None or not packet.is_keyframe:
+            # Fragments must start at a video keyframe to be playable.
+            if self._opener is None or not _is_video_keyframe(packet):
                 return
             opener, self._opener = self._opener, None
             try:
@@ -186,3 +175,61 @@ class LiveFeed:
                 loop.call_soon_threadsafe(subscription.push, message)
             except RuntimeError:
                 return  # loop closed (shutdown): nobody left to deliver to
+
+
+def _is_video_keyframe(packet: EncodedPacket) -> bool:
+    return packet.kind == "video" and packet.is_keyframe
+
+
+class LiveFeed:
+    """Remuxes one camera's packets into fMP4 and fans them out to viewers.
+
+    Two renditions run side by side while the camera is connected: video
+    only, for everyone, and video with audio, sent only to viewers who asked
+    for it (and may hear it, which the stream router checks). Audio packets
+    must already be on the video's clock (see AudioClockAligner).
+
+    The capture thread calls on_stream_opened/on_packet/on_stream_closed;
+    viewers subscribe on the event loop. A new viewer starts with the init
+    segment and the fragments since the latest keyframe, so playback can
+    begin immediately instead of waiting for the next keyframe.
+    """
+
+    def __init__(self, max_queued_bytes: int = _MAX_QUEUED_BYTES) -> None:
+        self._video = _Rendition(max_queued_bytes)
+        self._with_audio = _Rendition(max_queued_bytes)
+
+    @property
+    def mime(self) -> str | None:
+        """MIME type (with codecs) of the video-only stream, if known yet."""
+        return self._video.mime
+
+    @property
+    def audio_mime(self) -> str | None:
+        """MIME type (with codecs) of the video-with-audio stream, or None
+        while it isn't known or the camera sends no supported audio."""
+        return self._with_audio.mime
+
+    # ── Viewers (event loop) ────────────────────────────────────────────
+
+    def subscribe(self, audio: bool = False) -> LiveSubscription:
+        return (self._with_audio if audio else self._video).subscribe()
+
+    # ── Capture thread ──────────────────────────────────────────────────
+
+    def on_stream_opened(
+        self, opener: SegmenterOpener, audio_opener: SegmenterOpener | None = None
+    ) -> None:
+        """opener builds the video-only segmenter; audio_opener, if the
+        camera has audio, the one with audio (it may still return None)."""
+        self._video.on_stream_opened(opener)
+        self._with_audio.on_stream_opened(audio_opener)
+
+    def on_packet(self, packet: EncodedPacket) -> None:
+        if packet.kind == "video":
+            self._video.on_packet(packet)
+        self._with_audio.on_packet(packet)
+
+    def on_stream_closed(self) -> None:
+        self._video.on_stream_closed()
+        self._with_audio.on_stream_closed()

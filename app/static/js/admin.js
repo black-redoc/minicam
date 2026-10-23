@@ -64,7 +64,8 @@ class AdminPage {
 
     /**
      * @param {{id: number, email: string, is_admin: boolean}} user
-     * @param {Array<{camera_name: string, can_view: boolean, can_use_ptz: boolean}>} permissions
+     * @param {Array<{camera_name: string, can_view: boolean, can_use_ptz: boolean,
+     *                 can_listen: boolean}>} permissions
      * @param {boolean} wanAccess
      */
     #buildUserCard(user, permissions, wanAccess) {
@@ -126,6 +127,8 @@ class AdminPage {
                     <th class="font-normal py-1">Camera</th>
                     <th class="font-normal py-1 text-center">View</th>
                     <th class="font-normal py-1 text-center">PTZ</th>
+                    <th class="font-normal py-1 text-center"
+                        title="Hear the camera's microphone (also needs View)">Listen</th>
                 </tr>
             </thead>
         `;
@@ -135,8 +138,9 @@ class AdminPage {
             const existing  = permByCamera.get(camera.name);
             const canView   = existing?.can_view ?? false;
             const canUsePtz = existing?.can_use_ptz ?? false;
+            const canListen = existing?.can_listen ?? false;
             tbody.appendChild(
-                this.#buildPermissionRow(user.id, camera.name, canView, canUsePtz),
+                this.#buildPermissionRow(user.id, camera.name, canView, canUsePtz, canListen),
             );
         }
         table.appendChild(tbody);
@@ -144,30 +148,31 @@ class AdminPage {
         return card;
     }
 
-    #buildPermissionRow(userId, cameraName, canView, canUsePtz) {
+    #buildPermissionRow(userId, cameraName, canView, canUsePtz, canListen) {
         const row = document.createElement('tr');
         row.className = 'border-t border-slate-800';
 
-        const viewCheckbox = this.#buildCheckbox(canView);
-        const ptzCheckbox  = this.#buildCheckbox(canUsePtz);
+        const viewCheckbox   = this.#buildCheckbox(canView);
+        const ptzCheckbox    = this.#buildCheckbox(canUsePtz);
+        const listenCheckbox = this.#buildCheckbox(canListen);
+        listenCheckbox.setAttribute('aria-label', `Listen to ${cameraName}`);
 
         const save = () => this.#savePermission(
             userId, cameraName, viewCheckbox.checked, ptzCheckbox.checked,
+            listenCheckbox.checked,
         );
         viewCheckbox.addEventListener('change', save);
         ptzCheckbox.addEventListener('change', save);
+        listenCheckbox.addEventListener('change', save);
 
         row.innerHTML = `<td class="py-1.5">${this.#escape(cameraName)}</td>`;
 
-        const viewCell = document.createElement('td');
-        viewCell.className = 'text-center';
-        viewCell.appendChild(viewCheckbox);
-        row.appendChild(viewCell);
-
-        const ptzCell = document.createElement('td');
-        ptzCell.className = 'text-center';
-        ptzCell.appendChild(ptzCheckbox);
-        row.appendChild(ptzCell);
+        for (const checkbox of [viewCheckbox, ptzCheckbox, listenCheckbox]) {
+            const cell = document.createElement('td');
+            cell.className = 'text-center';
+            cell.appendChild(checkbox);
+            row.appendChild(cell);
+        }
 
         return row;
     }
@@ -180,7 +185,7 @@ class AdminPage {
         return input;
     }
 
-    async #savePermission(userId, cameraName, canView, canUsePtz) {
+    async #savePermission(userId, cameraName, canView, canUsePtz, canListen) {
         await authedFetch(PERMISSIONS_API, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -189,6 +194,7 @@ class AdminPage {
                 camera_name: cameraName,
                 can_view: canView,
                 can_use_ptz: canUsePtz,
+                can_listen: canListen,
             }),
         });
     }

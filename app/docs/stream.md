@@ -19,10 +19,12 @@ Requires a valid session cookie, the `can_view` permission on `camera_name`, and
 
 **Response `200`:**
 ```json
-{ "token": "<jwt>", "expires_in": 30, "video_mime": "video/mp4; codecs=\"hvc1.1.6.L90\"" }
+{ "token": "<jwt>", "expires_in": 30, "video_mime": "video/mp4; codecs=\"hvc1.1.6.L90\"", "audio_mime": null }
 ```
 
 `video_mime` is the MIME type, with its RFC 6381 `codecs`, of the camera's live video, detected from the RTSP stream itself (never from the vendor or the URL: many cameras send HEVC on `/h264/...` paths). It is `null` until the camera has connected and sent a keyframe; the client then uses MJPEG.
+
+`audio_mime` is the same stream with the camera's audio, e.g. `video/mp4; codecs="hvc1.1.6.L90,mp4a.40.2"`. It is `null` unless the camera sends AAC audio (other audio codecs can't be passed through) **and** the caller has the `can_listen` permission. To hear it, request the token with `?audio=true`: the token then also authorizes audio, and the request fails with **`403`** without `can_listen`.
 
 The token is a separate, single-purpose JWT (distinct from the session cookie): it is bound to `camera_name` via a `camera` claim and expires after `expires_in` seconds (`MINICAM_STREAM_TOKEN_TTL_SECONDS`, default `30` — see [Configuration](/doc/configuration#security-settings)). It is *not* checked against the sessions table, so it keeps working — the same trust model as a signed URL — even if the session is revoked after the handshake succeeds.
 
@@ -34,7 +36,7 @@ The token is a separate, single-purpose JWT (distinct from the session cookie): 
 WS /ws/stream/{camera_name}?token=<jwt>
 ```
 
-The `token` query parameter must be the value returned by step 1, issued for this exact `camera_name`. Add `&format=fmp4` for the camera's own video (see [fMP4 format](#fmp4-format)); without it the stream is MJPEG.
+The `token` query parameter must be the value returned by step 1, issued for this exact `camera_name`. Add `&format=fmp4` for the camera's own video (see [fMP4 format](#fmp4-format)); without it the stream is MJPEG. Add `&audio=true` as well for its audio; the socket is closed with **1008** unless the token was issued with `audio=true`, and MJPEG never carries audio.
 
 ## Behavior
 
@@ -49,10 +51,16 @@ The `token` query parameter must be the value returned by step 1, issued for thi
 With `format=fmp4` the socket carries, in order:
 
 1. A **text** message `{"type": "init", "mime": "<video_mime>"}`, then a **binary** message with the MP4 init segment (`ftyp` + `moov`). Both are sent again whenever the camera reconnects; the client must then start a new `MediaSource`.
-2. One **binary** message per frame: an MP4 fragment (`moof` + `mdat`). A new viewer first receives the fragments since the latest keyframe, so playback starts immediately.
+2. One **binary** message per frame: an MP4 fragment (`moof` + `mdat`), and with `audio=true` also the audio between frames. A new viewer first receives the fragments since the latest keyframe, so playback starts immediately.
 3. **Text** messages `{"type": "detections", "width", "height", "boxes": [{"label", "confidence", "color", "x1", "y1", "x2", "y2"}]}` whenever the camera's detections change. Coordinates are in frame pixels (`width` x `height`); the client draws the boxes over the video, since they can't be drawn into compressed video.
 
-The video is never re-encoded, so it costs the server almost no CPU. One remuxer per camera is shared by all its viewers. A viewer that falls more than a few seconds behind skips ahead to the next keyframe. The connection closes with code **1001** if the camera is removed or renamed, and with **1008** if `format=fmp4` is requested for a camera that has no live feed.
+The video is never re-encoded, so it costs the server almost no CPU. Without `audio=true` no audio is ever sent: the server keeps a separate video-only stream for those viewers.
+
+## Live audio
+
+The dashboard shows a speaker button on a camera's single view when its audio can be heard (`audio_mime` set and playable by the browser). Audio is **off every time a camera is opened**; the button reconnects with `audio=true` (a 1–2 s gap while the stream restarts at a keyframe) and the FPS indicator then reads e.g. `11 FPS · HEVC + audio`. Admins grant listening per user and camera with **Listen** on `/admin`.
+
+Many cameras (EZVIZ among them) timestamp audio and video on unrelated clocks and round audio timestamps. minicam measures the offset between the two clocks from packet arrival times during the first second of each connection (audio is held back until then), and restamps audio frames back to back, so audio stays in sync with the video whatever the camera vendor. One remuxer per camera is shared by all its viewers. A viewer that falls more than a few seconds behind skips ahead to the next keyframe. The connection closes with code **1001** if the camera is removed or renamed, and with **1008** if `format=fmp4` is requested for a camera that has no live feed.
 
 ## Frame Format (MJPEG)
 

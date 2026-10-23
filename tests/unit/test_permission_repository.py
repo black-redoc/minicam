@@ -80,3 +80,19 @@ async def test_list_viewer_ids_returns_active_viewers_only(
 
     assert await repo.list_viewer_ids("cam1") == [viewer.id]
     assert await repo.list_viewer_ids("missing") == []
+
+
+async def test_can_listen_defaults_off_and_round_trips(
+    db_connection: aiosqlite.Connection,
+) -> None:
+    user_id = await _make_user(db_connection)
+    repo = SQLitePermissionRepository(db_connection)
+    assert (await repo.upsert(user_id, "cam1", True, False)).can_listen is False
+
+    granted = await repo.upsert(user_id, "cam1", True, False, can_listen=True)
+    assert granted.can_listen is True
+    stored = await repo.get(user_id, "cam1")
+    assert stored is not None and stored.can_listen is True
+
+    revoked = await repo.upsert(user_id, "cam1", True, False, can_listen=False)
+    assert revoked.can_listen is False

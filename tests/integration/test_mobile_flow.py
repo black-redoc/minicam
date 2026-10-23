@@ -44,7 +44,9 @@ class TestMyCameras:
             "viewer@example.com", PasswordHasher().hash("pw"), is_admin=False
         )
         perms = SQLitePermissionRepository(db_connection)
-        await perms.upsert(user.id, "patio", can_view=True, can_use_ptz=True)
+        await perms.upsert(
+            user.id, "patio", can_view=True, can_use_ptz=True, can_listen=True
+        )
         await perms.upsert(user.id, "entrada", can_view=True, can_use_ptz=False)
         # PTZ-only grant: not viewable, so not listed.
         await perms.upsert(user.id, "garaje", can_view=False, can_use_ptz=True)
@@ -66,8 +68,8 @@ class TestMyCameras:
 
         assert res.status_code == 200
         assert res.json() == [
-            {"name": "entrada", "can_use_ptz": False},
-            {"name": "patio", "can_use_ptz": True},
+            {"name": "entrada", "can_use_ptz": False, "can_listen": False},
+            {"name": "patio", "can_use_ptz": True, "can_listen": True},
         ]
 
 

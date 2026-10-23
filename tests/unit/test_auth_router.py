@@ -449,6 +449,30 @@ class TestSetPermission:
         assert res.status_code == 200
         assert res.json()["can_view"] is True
 
+    def test_grants_can_listen(self, app: FastAPI) -> None:
+        permission_repository = AsyncMock()
+        permission_repository.upsert.return_value = CameraPermission(
+            1, 1, "cam1", True, False, "t", can_listen=True
+        )
+        app.dependency_overrides[require_admin] = lambda: _ADMIN
+        app.dependency_overrides[get_permission_repository] = lambda: (
+            permission_repository
+        )
+
+        res = TestClient(app).post(
+            "/api/auth/permissions",
+            json={
+                "user_id": 1,
+                "camera_name": "cam1",
+                "can_view": True,
+                "can_listen": True,
+            },
+        )
+        assert res.json()["can_listen"] is True
+        permission_repository.upsert.assert_awaited_once_with(
+            1, "cam1", True, False, True
+        )
+
 
 class TestListPermissions:
     def test_requires_admin(self, app: FastAPI) -> None:
@@ -476,12 +500,14 @@ class TestListPermissions:
                 "camera_name": "cam1",
                 "can_view": True,
                 "can_use_ptz": False,
+                "can_listen": False,
             },
             {
                 "user_id": 1,
                 "camera_name": "cam2",
                 "can_view": False,
                 "can_use_ptz": True,
+                "can_listen": False,
             },
         ]
         permission_repository.list_for_user.assert_called_once_with(1)
