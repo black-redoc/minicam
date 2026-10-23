@@ -1,8 +1,9 @@
 """Writes one clip's packets to an MP4 file on a dedicated thread.
 
 Packets are copied into the MP4 as they are (remux, no re-encoding), which
-costs almost no CPU: a Raspberry Pi 5 has no hardware H.264 encoder, so
+costs almost no CPU: a Raspberry Pi 5 has no hardware video encoder, so
 re-encoding would compete with live streaming and detection for the CPU.
+Whatever codec the camera sends (H.264 or HEVC) ends up in the clip.
 
 The file is written as "<name>.mp4.part" and renamed to "<name>.mp4" only
 once complete, so a crash or a failed clip never leaves a playable-looking
@@ -33,6 +34,9 @@ PART_SUFFIX = ".part"
 # is abandoned rather than letting the queue grow without bound.
 _MAX_QUEUED_PACKETS = 2000
 _FINISH = object()
+# MP4 sample entry per codec, where FFmpeg's default isn't one every browser
+# plays: Safari refuses HEVC tagged "hev1" and only plays "hvc1".
+_MP4_CODEC_TAGS = {"hevc": "hvc1"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +49,8 @@ class FinishedClip:
 
 
 def open_output(path: Path, template: VideoStream) -> OutputContainer:
-    """Open an MP4 output whose video stream copies template's codec.
+    """Open an MP4 output whose video stream copies template's codec,
+    tagged so browsers can play it.
 
     Must be called while template's input container is open, with
     av_io_lock held (see RTSPCamera._open_clip_output).
@@ -54,7 +59,10 @@ def open_output(path: Path, template: VideoStream) -> OutputContainer:
     # browser can start playing before the whole file has downloaded.
     output = av.open(str(path), "w", format="mp4", options={"movflags": "+faststart"})
     try:
-        output.add_stream_from_template(template)
+        stream = output.add_stream_from_template(template)
+        tag = _MP4_CODEC_TAGS.get(template.codec_context.name)
+        if tag is not None:
+            stream.codec_context.codec_tag = tag
     except BaseException:
         output.close()
         raise

@@ -19,7 +19,7 @@ from app.services.camera import RTSPCamera
 from app.services.recording.packets import ClipStart
 from app.services.recording.recorder import CameraRecorder
 from app.services.recording.writer import ClipWriter, FinishedClip, _Muxer
-from tests.fixtures.h264 import encode_h264_ts
+from tests.fixtures.video import encode_ts
 
 
 def test_records_a_playable_clip_from_the_live_stream(tmp_path: Path) -> None:
@@ -40,7 +40,7 @@ def test_records_a_playable_clip_from_the_live_stream(tmp_path: Path) -> None:
     buf = FrameBuffer()
     cam = RTSPCamera("rtsp://u:p@cam/stream", buf, name="entrance", recorder=recorder)
     cam._running = True
-    container = av.open(io.BytesIO(encode_h264_ts(frames=20, gop=5)), "r")
+    container = av.open(io.BytesIO(encode_ts(frames=20, gop=5)), "r")
     real_open = av.open
 
     def fake_open(url: object, *args: object, **kwargs: object) -> object:

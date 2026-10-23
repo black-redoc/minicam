@@ -36,8 +36,9 @@ Who can see a clip follows the same rules as live view: you need `can_view` on i
 
 ## How it works (and what it costs)
 
-- Clips are **not re-encoded**. minicam copies the camera's own H.264 packets into the MP4 file (a remux), so recording costs almost no CPU and keeps the camera's full quality. A Raspberry Pi 5 has no hardware H.264 encoder, so re-encoding would compete with live streaming and detection for the CPU.
+- Clips are **not re-encoded**. minicam copies the camera's own video packets into the MP4 file (a remux), so recording costs almost no CPU and keeps the camera's full quality. A Raspberry Pi 5 has no hardware video encoder, so re-encoding would compete with live streaming and detection for the CPU.
 - As a consequence, clips **don't show the detection boxes** that the live view draws.
+- Clips keep the camera's codec, **H.264 or HEVC (H.265)**, whatever the RTSP URL says: many Hikvision and EZVIZ cameras send HEVC on `/h264/...` paths. HEVC clips play in Safari and in Chrome or Edge on devices with hardware HEVC decoding; other browsers may not play them, but **Download** still works with any player (for example VLC).
 - The pre-roll buffer holds the last few seconds of compressed video per camera, starting at a keyframe. That is a few MB of RAM per camera, and only while recording is on.
 - Each clip is written by its own thread, so a slow SD card never stalls the live stream. If the disk falls more than about 80 seconds of video behind, that clip is abandoned and logged.
 

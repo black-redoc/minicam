@@ -1,4 +1,4 @@
-"""Tests for ClipWriter: real H.264 packets remuxed into a playable MP4."""
+"""Tests for ClipWriter: real H.264 and HEVC packets remuxed into a playable MP4."""
 
 from __future__ import annotations
 
@@ -18,17 +18,24 @@ from app.services.recording.writer import (
     FinishedClip,
     open_output,
 )
-from tests.fixtures.h264 import FPS, HEIGHT, WIDTH, h264_packets, open_h264_source
+from tests.fixtures.video import (
+    FPS,
+    HEIGHT,
+    WIDTH,
+    Codec,
+    open_source,
+    video_packets,
+)
 
 _STARTED_AT = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
 
 
 def _write_clip(
-    tmp_path: Path, packets: list[EncodedPacket]
+    tmp_path: Path, packets: list[EncodedPacket], codec: Codec = "h264"
 ) -> tuple[Path, list[FinishedClip]]:
     finished: list[FinishedClip] = []
     path = tmp_path / "clip.mp4"
-    with open_h264_source() as (_container, stream):
+    with open_source(codec=codec) as (_container, stream):
         start = ClipStart("entrance", _STARTED_AT, lambda p: open_output(p, stream))
         writer = ClipWriter.open(start, path, finished.append)
     assert writer is not None
@@ -45,7 +52,7 @@ def _decoded_frames(path: Path) -> int:
 
 
 def test_writes_a_playable_mp4_from_a_keyframe(tmp_path: Path) -> None:
-    packets = h264_packets(frames=30, gop=5)[5:]  # starts on keyframe 5
+    packets = video_packets(frames=30, gop=5)[5:]  # starts on keyframe 5
     path, finished = _write_clip(tmp_path, packets)
 
     assert path.is_file()
@@ -67,10 +74,25 @@ def test_writes_a_playable_mp4_from_a_keyframe(tmp_path: Path) -> None:
     assert clip.duration_seconds == pytest.approx((len(packets) - 1) / FPS)
 
 
+@pytest.mark.parametrize(("codec", "tag"), [("h264", "avc1"), ("hevc", "hvc1")])
+def test_clip_keeps_the_camera_codec_with_a_tag_every_browser_plays(
+    tmp_path: Path, codec: Codec, tag: str
+) -> None:
+    packets = video_packets(frames=10, gop=5, codec=codec)
+    path, finished = _write_clip(tmp_path, packets, codec)
+
+    with av.open(str(path)) as container:
+        stream = container.streams.video[0]
+        assert stream.codec_context.name == codec
+        assert stream.codec_context.codec_tag == tag
+    assert _decoded_frames(path) >= len(packets) - 1
+    assert len(finished) == 1
+
+
 def test_repeated_or_missing_timestamps_do_not_abort_the_clip(
     tmp_path: Path,
 ) -> None:
-    packets = h264_packets(frames=10, gop=5)
+    packets = video_packets(frames=10, gop=5)
     broken = [
         packets[0],
         dataclasses.replace(packets[1], dts=packets[0].dts, pts=packets[0].pts),
@@ -83,7 +105,7 @@ def test_repeated_or_missing_timestamps_do_not_abort_the_clip(
 
 
 def test_packets_without_any_timestamp_are_skipped(tmp_path: Path) -> None:
-    packets = h264_packets(frames=10, gop=5)
+    packets = video_packets(frames=10, gop=5)
     unplaceable = dataclasses.replace(packets[1], pts=None, dts=None)
     path, finished = _write_clip(tmp_path, [packets[0], unplaceable, *packets[2:]])
     assert path.is_file()
@@ -131,7 +153,7 @@ def test_mux_error_discards_the_clip(
     output.mux.side_effect = ValueError("bad packet")
     writer, on_finished = _started_writer(tmp_path, output)
     writer.part_path.write_bytes(b"partial")
-    for packet in h264_packets(frames=5, gop=5):
+    for packet in video_packets(frames=5, gop=5):
         writer.write(packet)
     writer.finish()
     writer._run()
@@ -150,7 +172,7 @@ def test_close_error_discards_the_clip(
     output.close.side_effect = OSError("disk full")
     writer, on_finished = _started_writer(tmp_path, output)
     writer.part_path.write_bytes(b"partial")
-    writer.write(h264_packets(frames=1, gop=1)[0])
+    writer.write(video_packets(frames=1, gop=1)[0])
     writer.finish()
     writer._run()
 
@@ -166,7 +188,7 @@ def test_rename_error_discards_the_clip(
     output = _fake_output()
     writer, on_finished = _started_writer(tmp_path, output)
     # The .part file was never created, so the rename fails.
-    writer.write(h264_packets(frames=1, gop=1)[0])
+    writer.write(video_packets(frames=1, gop=1)[0])
     writer.finish()
     writer._run()
 
@@ -181,7 +203,7 @@ def test_queue_overflow_abandons_the_clip(
     output = _fake_output()
     writer, on_finished = _started_writer(tmp_path, output, max_queued=2)
     writer.part_path.write_bytes(b"partial")
-    for packet in h264_packets(frames=5, gop=5):
+    for packet in video_packets(frames=5, gop=5):
         writer.write(packet)
     writer.finish()
     writer._run()
