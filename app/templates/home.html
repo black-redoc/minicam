@@ -485,17 +485,11 @@
     }
 
     async function enterSingle(switchToName = null) {
-        // Snapshot the last rendered frame from the target camera's cell so the
-        // single-view <img> shows it immediately — no blank flash during reconnect.
+        // Show the target camera's last frame from its grid cell (JPEG or
+        // fMP4 video) right away — no blank flash during reconnect.
         const targetName = switchToName ?? activeCameraName;
-        const cell = document.querySelector(`[data-grid-cam="${CSS.escape(targetName)}"]`);
-        if (cell) {
-            const gridImg = cell.querySelector('img');
-            if (gridImg?.src?.startsWith('blob:')) {
-                document.getElementById('camera-feed').src = gridImg.src;
-                document.getElementById('video-overlay').classList.add('hidden');
-            }
-        }
+        const snapshot = gridWidget.snapshotUrl(targetName);
+        if (snapshot) stream.showSnapshot(snapshot);
 
         document.getElementById('status-badge').classList.remove('hidden');
         document.getElementById('fps-display').classList.remove('fps-display--grid-hidden');
@@ -515,6 +509,7 @@
         document.getElementById('status-badge').classList.add('hidden');
         document.getElementById('fps-display').classList.add('fps-display--grid-hidden');
         if (wasSingle) {
+            gridWidget.rememberFrame(activeCameraName, stream.snapshotUrl());
             stream.disconnect();
             document.getElementById('single-view').classList.add('hidden');
             fadeIn(document.getElementById('grid-view'));

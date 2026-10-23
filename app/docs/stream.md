@@ -1,6 +1,13 @@
 # Video Streaming
 
-minicam streams live video to the browser using a **binary WebSocket** connection. Each message is a complete JPEG frame. Since the [session auth and camera-permission model](/doc/auth) was added, opening the WebSocket is a **two-step handshake**: first mint a short-lived stream token over HTTP, then open the WebSocket with that token.
+minicam streams live video to the browser over a **WebSocket**, in one of two formats:
+
+- **fMP4**: the camera's own compressed video (H.264 or HEVC), remuxed without re-encoding into fragmented MP4 and played by the browser through Media Source Extensions. It uses a small fraction of the bandwidth of JPEG frames (for example ~150 kbit/s instead of ~5–8 Mbit/s for a 768x432 sub stream), which is what makes viewing through the Cloudflare Tunnel smooth.
+- **MJPEG**: one complete JPEG per message. The fallback for browsers that can't play the camera's codec, and the default for clients that don't ask for fMP4 (such as the mobile app today).
+
+The dashboard picks fMP4 automatically when `MediaSource.isTypeSupported()` accepts the camera's codec, and MJPEG otherwise. HEVC plays in Safari (including iPhone, through `ManagedMediaSource`) and in Chrome, Edge and Brave on devices with hardware HEVC decoding; Firefox usually gets MJPEG for HEVC cameras. H.264 cameras play as fMP4 everywhere.
+
+The FPS counter shows which format each view is using, e.g. `11 FPS · HEVC` (fMP4) or `11 FPS · MJPEG`. Hover it for the exact codec or the reason for MJPEG; the browser console logs the same (`[minicam] office: HEVC (...)`). Since the [session auth and camera-permission model](/doc/auth) was added, opening the WebSocket is a **two-step handshake**: first mint a short-lived stream token over HTTP, then open the WebSocket with that token.
 
 ## Step 1 — Issue a stream token
 
@@ -12,8 +19,10 @@ Requires a valid session cookie, the `can_view` permission on `camera_name`, and
 
 **Response `200`:**
 ```json
-{ "token": "<jwt>", "expires_in": 30 }
+{ "token": "<jwt>", "expires_in": 30, "video_mime": "video/mp4; codecs=\"hvc1.1.6.L90\"" }
 ```
+
+`video_mime` is the MIME type, with its RFC 6381 `codecs`, of the camera's live video, detected from the RTSP stream itself (never from the vendor or the URL: many cameras send HEVC on `/h264/...` paths). It is `null` until the camera has connected and sent a keyframe; the client then uses MJPEG.
 
 The token is a separate, single-purpose JWT (distinct from the session cookie): it is bound to `camera_name` via a `camera` claim and expires after `expires_in` seconds (`MINICAM_STREAM_TOKEN_TTL_SECONDS`, default `30` — see [Configuration](/doc/configuration#security-settings)). It is *not* checked against the sessions table, so it keeps working — the same trust model as a signed URL — even if the session is revoked after the handshake succeeds.
 
@@ -25,7 +34,7 @@ The token is a separate, single-purpose JWT (distinct from the session cookie): 
 WS /ws/stream/{camera_name}?token=<jwt>
 ```
 
-The `token` query parameter must be the value returned by step 1, issued for this exact `camera_name`.
+The `token` query parameter must be the value returned by step 1, issued for this exact `camera_name`. Add `&format=fmp4` for the camera's own video (see [fMP4 format](#fmp4-format)); without it the stream is MJPEG.
 
 ## Behavior
 
@@ -35,11 +44,21 @@ The `token` query parameter must be the value returned by step 1, issued for thi
 - The connection stays open indefinitely as long as the camera is running. If the camera thread crashes, the WebSocket will stop delivering frames but the connection remains open.
 - Since the token is only checked at handshake time, a client whose token expires mid-stream is **not** disconnected — the socket keeps delivering frames.
 
-## Frame Format
+## fMP4 format
+
+With `format=fmp4` the socket carries, in order:
+
+1. A **text** message `{"type": "init", "mime": "<video_mime>"}`, then a **binary** message with the MP4 init segment (`ftyp` + `moov`). Both are sent again whenever the camera reconnects; the client must then start a new `MediaSource`.
+2. One **binary** message per frame: an MP4 fragment (`moof` + `mdat`). A new viewer first receives the fragments since the latest keyframe, so playback starts immediately.
+3. **Text** messages `{"type": "detections", "width", "height", "boxes": [{"label", "confidence", "color", "x1", "y1", "x2", "y2"}]}` whenever the camera's detections change. Coordinates are in frame pixels (`width` x `height`); the client draws the boxes over the video, since they can't be drawn into compressed video.
+
+The video is never re-encoded, so it costs the server almost no CPU. One remuxer per camera is shared by all its viewers. A viewer that falls more than a few seconds behind skips ahead to the next keyframe. The connection closes with code **1001** if the camera is removed or renamed, and with **1008** if `format=fmp4` is requested for a camera that has no live feed.
+
+## Frame Format (MJPEG)
 
 Each WebSocket message is a **binary** payload containing a raw JPEG image. No framing, no metadata — just bytes you can feed directly to an `<img>` tag via a Blob URL.
 
-## JavaScript Example
+## JavaScript Example (MJPEG)
 
 ```js
 async function fetchStreamToken(cameraName) {
@@ -75,14 +94,14 @@ ws.onclose = (event) => {
 };
 ```
 
-This is exactly the pattern implemented by `VideoStream` in `app/static/js/stream.js`, which also auto-reconnects (re-fetching a fresh token each time) on close or error.
+This is the MJPEG path of `VideoStream` in `app/static/js/stream.js`, which also auto-reconnects (re-fetching a fresh token each time) on close or error. Its fMP4 path (`Fmp4Player`) feeds the binary messages to a `SourceBuffer`, keeps playback near the newest frame, and reconnects as MJPEG if the browser fails to play the stream.
 
 ## Performance Notes
 
 | Parameter | Value |
 |-----------|-------|
 | Poll rate | 60 Hz |
-| Frame format | JPEG (quality set in encoder) |
+| Frame format | fMP4 (camera's own H.264/HEVC) or JPEG (quality set in encoder) |
 | Latency | ~1–2 frames (latest-frame buffer + WebSocket queue) |
 | Protocol | Binary WebSocket over HTTP/1.1 upgrade |
 | Stream token TTL | 30s by default (`MINICAM_STREAM_TOKEN_TTL_SECONDS`) |

@@ -63,3 +63,11 @@ class TestSecurityHeaders:
         res = client.get("/ping")
 
         assert "strict-transport-security" in res.headers
+
+    def test_csp_lets_the_live_view_play_its_media_source(self, app: FastAPI) -> None:
+        client = TestClient(app, client=("192.168.1.50", 12345))
+
+        csp = client.get("/ping").headers["content-security-policy"]
+
+        # stream.js plays fMP4 through a blob: MediaSource URL.
+        assert "media-src 'self' blob:" in csp.split("; ")

@@ -19,7 +19,7 @@ const _BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAA
 class GridWidget {
     #container
     #streams   = new Map()
-    #lastFrames = new Map()   // cameraName → last blob URL, persists across unmount/mount cycles
+    #lastFrames = new Map()   // cameraName → last frame (data: URL), persists across unmount/mount cycles
 
     /** @param {HTMLElement} containerEl */
     constructor(containerEl) {
@@ -77,16 +77,28 @@ class GridWidget {
      * clear the container.  Snapshots survive until the next mount() call.
      */
     unmount() {
-        this.#container.querySelectorAll('[data-grid-cam]').forEach((cell) => {
-            const img = cell.querySelector('img');
-            if (img?.src?.startsWith('blob:')) {
-                this.#lastFrames.set(cell.dataset.gridCam, img.src);
-            }
-        });
-
+        this.#streams.forEach((stream, name) => this.rememberFrame(name, stream.snapshotUrl()));
         this.#streams.forEach((stream) => stream.disconnect());
         this.#streams.clear();
         this.#container.innerHTML = '';
+    }
+
+    /**
+     * The last frame shown for a camera, as a data: URL, or null.
+     * @param {string} name
+     * @returns {string | null}
+     */
+    snapshotUrl(name) {
+        return this.#streams.get(name)?.snapshotUrl() ?? this.#lastFrames.get(name) ?? null;
+    }
+
+    /**
+     * Remember a camera's last frame, shown in its cell on the next mount().
+     * @param {string} name
+     * @param {string | null} url
+     */
+    rememberFrame(name, url) {
+        if (url) this.#lastFrames.set(name, url);
     }
 
     // ── Private ──────────────────────────────────────────────

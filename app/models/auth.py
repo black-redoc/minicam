@@ -21,6 +21,9 @@ class UserPublic(BaseModel):
 class StreamTokenResponse(BaseModel):
     token: str
     expires_in: int
+    # MIME type with codecs of the camera's own stream (format=fmp4), or
+    # None while it isn't known yet: the client then uses MJPEG.
+    video_mime: str | None = None
 
 
 class CreateUserRequest(BaseModel):

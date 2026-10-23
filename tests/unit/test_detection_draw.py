@@ -7,7 +7,7 @@ import numpy as np
 from app.services.detection.base import Detection
 from app.services.detection.draw import (
     BORDER_THICKNESS_PX,
-    _color_for_class,
+    color_for_class,
     draw_detections,
 )
 
@@ -40,7 +40,7 @@ class TestDrawDetectionsSingleBox:
         detection = _make_detection(x1=10, y1=10, x2=30, y2=30)
 
         result = draw_detections(image, [detection])
-        color = _color_for_class(detection.class_name)
+        color = color_for_class(detection.class_name)
 
         # Border pixels (just inside the rectangle edges) got the color.
         assert tuple(result[10, 20]) == color  # top edge
@@ -68,7 +68,7 @@ class TestDrawDetectionsSingleBox:
 
         result = draw_detections(image, [detection])
 
-        color = _color_for_class(detection.class_name)
+        color = color_for_class(detection.class_name)
         assert tuple(result[0, 0]) == color
         assert tuple(result[_HEIGHT - 1, _WIDTH - 1]) == color
 
@@ -84,17 +84,17 @@ class TestDrawDetectionsMultipleClasses:
         person_color = tuple(result[0, 5])
         dog_color = tuple(result[20, 50])
         assert person_color != dog_color
-        assert person_color == _color_for_class("person")
-        assert dog_color == _color_for_class("dog")
+        assert person_color == color_for_class("person")
+        assert dog_color == color_for_class("dog")
 
 
 class TestColorForClass:
     def test_same_class_name_always_returns_same_color(self) -> None:
-        assert _color_for_class("cat") == _color_for_class("cat")
+        assert color_for_class("cat") == color_for_class("cat")
 
     def test_unknown_classes_get_a_deterministic_fallback_color(self) -> None:
-        assert _color_for_class("skateboard") == _color_for_class("skateboard")
+        assert color_for_class("skateboard") == color_for_class("skateboard")
         # Two different unknown classes are not guaranteed to differ (the
         # fallback palette is finite), but person's dedicated color must
         # never collide with the generic fallback used for other classes.
-        assert _color_for_class("skateboard") != _color_for_class("person")
+        assert color_for_class("skateboard") != color_for_class("person")

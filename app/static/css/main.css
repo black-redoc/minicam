@@ -58,6 +58,25 @@
     display: block;
 }
 
+/* fMP4 live video (see stream.js). It sits over the <img>, which keeps
+   showing the last frame until the video has one of its own. */
+.live-video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+/* Detection boxes drawn by the browser over fMP4 video (see stream.js). */
+.detection-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
 .video-overlay {
     position: absolute;
     inset: 0;

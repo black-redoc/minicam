@@ -24,6 +24,7 @@ from app.security_settings import get_security_settings
 from app.services.camera import RTSPCamera
 from app.services.detection.factory import get_detection_backend
 from app.services.detection.worker import DetectionWorker
+from app.services.live.feed import LiveFeed
 from app.services.notifications import runtime as notification_runtime
 from app.services.ptz import PTZConfig, PTZService
 from app.services.recording import runtime as recording_runtime
@@ -49,12 +50,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     for cam in config.cameras:
         buf = FrameBuffer()
         state.frame_buffers[cam.name] = buf
+        live_feed = state.live_feeds[cam.name] = LiveFeed()
 
         camera = RTSPCamera(
             rtsp_url=cam.rtsp_url,
             buffer=buf,
             name=cam.name,
             recorder=recording_runtime.service.recorder_for(cam.name),
+            live_feed=live_feed,
         )
         camera.start()
         state.cameras[cam.name] = camera
