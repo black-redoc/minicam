@@ -37,9 +37,11 @@ _RTSP_OPTIONS: dict[str, str] = {
 _RECONNECT_BASE_DELAY_SECONDS = 2.0
 _RECONNECT_MAX_DELAY_SECONDS = 60.0
 _RECONNECT_JITTER = 0.2
-_STOP_TIMEOUT_SECONDS = 10.0
 _OPEN_TIMEOUT_SECONDS = 5.0
 _STALL_TIMEOUT_SECONDS = 15.0
+# Longer than the open and stall timeouts: a capture thread blocked on a
+# dead camera always gets to the end of its read and exits within this.
+_STOP_TIMEOUT_SECONDS = 20.0
 
 # Shared across every RTSPCamera instance/thread and the clip writers: see
 # app/services/av_io.py for why container open/close must be serialized.
@@ -126,21 +128,33 @@ class RTSPCamera:
         self._thread.start()
 
     def stop(self) -> None:
-        """Stop the capture loop and release all resources."""
+        """Stop the capture loop and release all resources.
+
+        Never closes the container while the capture thread may still be
+        demuxing it: FFmpeg frees the container's memory on close, so a
+        close from this thread during a demux is a use-after-free that
+        segfaults the whole process. Instead the capture thread sees
+        _running is False at its next packet (or when its read times out)
+        and closes the container itself.
+        """
         self._running = False
         self._stop_event.set()
 
-        self._close_container()
-
-        if self._thread is not None:
-            self._thread.join(timeout=_STOP_TIMEOUT_SECONDS)
-            if self._thread.is_alive():
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=_STOP_TIMEOUT_SECONDS)
+            if thread.is_alive():
+                # Still inside FFmpeg: leave the close to its own finally.
                 logger.warning(
                     "Capture thread did not stop within %.1f seconds",
                     _STOP_TIMEOUT_SECONDS,
                 )
+                self._thread = None
+                self._connected = False
+                return
             self._thread = None
 
+        self._close_container()
         self._connected = False
 
     def is_connected(self) -> bool:
@@ -259,10 +273,10 @@ class RTSPCamera:
 
     def _open_clip_output(self, path: Path) -> OutputContainer | None:
         """Open an MP4 output copying the live video stream's codec, or None
-        if the input is already closed (stop() or a reconnect raced us).
+        if the input is already closed or the camera is stopping.
 
-        Holding the container lock keeps stop() from freeing the input
-        container while its stream is used as the template.
+        Called from the capture thread, the only one that closes the input
+        container while it runs (see stop()).
         """
         with self._container_lock, _av_io_lock:
             container = self._container

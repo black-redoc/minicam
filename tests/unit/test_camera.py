@@ -1,5 +1,7 @@
 import logging
+import threading
 import time
+from collections.abc import Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -414,3 +416,75 @@ class TestThreadName:
             assert cam._thread is not None
             assert cam._thread.name == "rtsp:porch"
             cam.stop()
+
+
+class TestStopNeverClosesAContainerInUse:
+    """Regression: closing the container from stop() while the capture
+    thread was demuxing it freed FFmpeg memory under the demuxer and
+    segfaulted the server (e.g. when editing a camera's detection classes).
+    """
+
+    def test_close_happens_on_the_capture_thread_after_demux(self) -> None:
+        cam, _ = _make_camera()
+        demuxing = threading.Event()
+        state = {"in_demux": False, "closed_during_demux": False}
+        closed_by: list[str] = []
+
+        def demux(_stream: object) -> Iterator[MagicMock]:
+            while True:
+                state["in_demux"] = True
+                demuxing.set()
+                time.sleep(0.005)  # a blocking network read
+                state["in_demux"] = False
+                packet = MagicMock()
+                packet.decode.return_value = []
+                yield packet
+
+        def close() -> None:
+            if state["in_demux"]:
+                state["closed_during_demux"] = True
+            closed_by.append(threading.current_thread().name)
+
+        container = MagicMock()
+        container.streams = [MagicMock(type="video", codec_context=MagicMock())]
+        container.demux.side_effect = demux
+        container.close.side_effect = close
+
+        with patch("app.services.camera.av.open", return_value=container):
+            cam.start()
+            assert demuxing.wait(5)
+            cam.stop()
+
+        assert closed_by == ["rtsp:camera"]
+        assert state["closed_during_demux"] is False
+        assert cam._container is None
+        assert not cam.is_connected()
+
+    def test_stuck_capture_thread_keeps_its_container(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cam, _ = _make_camera()
+        container = MagicMock()
+        cam._container = container
+        stuck = MagicMock(spec=["join", "is_alive"])
+        stuck.is_alive.return_value = True
+        cam._thread = stuck
+
+        cam.stop()
+
+        container.close.assert_not_called()
+        assert cam._container is container
+        assert "did not stop within 20.0 seconds" in caplog.text
+
+    def test_leftover_container_is_closed_once_the_thread_exited(self) -> None:
+        cam, _ = _make_camera()
+        container = MagicMock()
+        cam._container = container
+        finished = MagicMock(spec=["join", "is_alive"])
+        finished.is_alive.return_value = False
+        cam._thread = finished
+
+        cam.stop()
+
+        container.close.assert_called_once()
+        assert cam._container is None
