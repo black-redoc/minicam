@@ -8,11 +8,13 @@ from concurrent.futures import ThreadPoolExecutor
 from app.buffers.frame_buffer import FrameBuffer
 from app.services.camera import RTSPCamera
 from app.services.detection.worker import DetectionSnapshot
+from app.services.live.feed import LiveFeed
 from app.services.ptz import PTZService
 
 cameras: dict[str, RTSPCamera] = {}
 ptz_services: dict[str, PTZService] = {}
 frame_buffers: dict[str, FrameBuffer] = {}
+live_feeds: dict[str, LiveFeed] = {}
 detection_workers: dict[str, asyncio.Task[None]] = {}
 detection_results: dict[str, DetectionSnapshot | None] = {}
 

@@ -42,6 +42,7 @@ from app.services.config_writer import (
 from app.services.detection.factory import get_detection_backend
 from app.services.detection.worker import DetectionWorker
 from app.services.discovery import discover_onvif_cameras
+from app.services.live.feed import LiveFeed
 from app.services.model_catalog import (
     InvalidManifestError,
     catalog_url,
@@ -162,12 +163,16 @@ def _start_camera_and_ptz(cam_config: CameraConfig) -> None:
 
         buf = FrameBuffer()
         state.frame_buffers[cam_config.name] = buf
+    live_feed = state.live_feeds.get(cam_config.name)
+    if live_feed is None:
+        live_feed = state.live_feeds[cam_config.name] = LiveFeed()
 
     camera = RTSPCamera(
         rtsp_url=cam_config.rtsp_url,
         buffer=buf,
         name=cam_config.name,
         recorder=recording_runtime.service.recorder_for(cam_config.name),
+        live_feed=live_feed,
     )
     camera.start()
     state.cameras[cam_config.name] = camera
@@ -240,6 +245,7 @@ async def edit_camera(name: str, body: CameraConfigRequest) -> CameraConfigRespo
         old_buf = state.frame_buffers.pop(name, None)
         if old_buf is not None:
             old_buf.shutdown()
+        state.live_feeds.pop(name, None)
     _start_camera_and_ptz(cam_config)
     _start_detection(cam_config)
     return _to_response(cam_config)
@@ -262,6 +268,7 @@ async def delete_camera(name: str) -> dict[str, str]:
     if buf is not None:
         buf.shutdown()
         del state.frame_buffers[name]
+    state.live_feeds.pop(name, None)
     return {"status": "ok"}
 
 

@@ -18,7 +18,8 @@ from app.buffers.frame_buffer import FrameBuffer
 from app.services.camera import RTSPCamera
 from app.services.recording.packets import ClipStart
 from app.services.recording.recorder import CameraRecorder
-from app.services.recording.writer import ClipWriter, FinishedClip, _Muxer
+from app.services.recording.writer import ClipWriter, FinishedClip
+from app.services.remux import Remuxer
 from tests.fixtures.video import encode_ts
 
 
@@ -76,4 +77,4 @@ def test_clip_output_is_refused_once_the_input_is_closed(tmp_path: Path) -> None
 def test_muxer_without_packets_has_zero_duration() -> None:
     output = MagicMock()
     output.streams.video = [MagicMock()]
-    assert _Muxer(output).duration_seconds == 0.0
+    assert Remuxer(output).duration_seconds == 0.0

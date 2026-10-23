@@ -21,7 +21,9 @@ from app.routers import stream as stream_router
 from app.security_settings import SecuritySettings
 from app.services.detection.base import Detection
 from app.services.detection.worker import DetectionSnapshot
+from app.services.live.feed import LiveFeed
 from app.services.stream_tokens import InvalidStreamTokenError, StreamTokenPayload
+from tests.fixtures.live import INIT, open_feed, packet
 
 _USER = User(
     id=1,
@@ -322,6 +324,7 @@ class TestIssueStreamToken:
         assert res.json() == {
             "token": "signed.jwt.token",
             "expires_in": _SETTINGS.stream_token_ttl_seconds,
+            "video_mime": None,
         }
         stream_token_service.issue.assert_called_once_with(
             _USER.id, "cam1", _SETTINGS.stream_token_ttl_seconds
@@ -339,3 +342,137 @@ class TestIssueStreamToken:
 
         res = client.post("/api/stream/cam1/token")
         assert res.status_code == 403
+
+
+class TestWebSocketStreamFmp4:
+    """format=fmp4: the camera's own video as fMP4 plus detection messages.
+
+    The feed is fed from the test thread while TestClient runs the app on
+    its own event loop, the same cross-thread hand-off as the capture thread.
+    """
+
+    def setup_method(self) -> None:
+        state_module.frame_buffers["cam1"] = _buffer_with(_make_frame(sequence=1))
+        self.feed = LiveFeed()
+        state_module.live_feeds["cam1"] = self.feed
+        open_feed(self.feed)
+        self.feed.on_packet(packet(1, keyframe=True))
+
+    def teardown_method(self) -> None:
+        state_module.frame_buffers.clear()
+        state_module.live_feeds.clear()
+        state_module.detection_results.clear()
+
+    def test_sends_init_fragments_and_detections(self) -> None:
+        with (
+            TestClient(_app_with_valid_token()) as client,
+            client.websocket_connect("/ws/stream/cam1?token=valid&format=fmp4") as ws,
+        ):
+            assert ws.receive_json() == {"type": "init", "mime": INIT.mime}
+            assert ws.receive_bytes() == INIT.data
+            assert ws.receive_json() == {
+                "type": "detections",
+                "width": 640,
+                "height": 480,
+                "boxes": [],
+            }
+            assert ws.receive_bytes() == b"\x01"
+            self.feed.on_packet(packet(2))
+            assert ws.receive_bytes() == b"\x02"
+
+    def test_detection_boxes_are_sent_when_they_change(self) -> None:
+        with (
+            TestClient(_app_with_valid_token()) as client,
+            client.websocket_connect("/ws/stream/cam1?token=valid&format=fmp4") as ws,
+        ):
+            ws.receive_json()
+            ws.receive_bytes()
+            assert ws.receive_json()["boxes"] == []
+            ws.receive_bytes()
+
+            state_module.detection_results["cam1"] = DetectionSnapshot(
+                detections=[Detection("person", 0.876, 10, 20, 110, 220)], sequence=1
+            )
+            message = ws.receive_json()
+            assert message["boxes"] == [
+                {
+                    "label": "person",
+                    "confidence": 0.88,
+                    "color": "#ff0000",
+                    "x1": 10,
+                    "y1": 20,
+                    "x2": 110,
+                    "y2": 220,
+                }
+            ]
+
+    def test_expired_detections_are_cleared(self) -> None:
+        state_module.detection_results["cam1"] = DetectionSnapshot(
+            detections=[Detection("person", 0.9, 1, 2, 3, 4)],
+            sequence=1,
+            expires_at=0.0,
+        )
+        state_module.frame_buffers.clear()  # no frame: size unknown
+        state_module.frame_buffers["cam1"] = FrameBuffer()
+        with (
+            TestClient(_app_with_valid_token()) as client,
+            client.websocket_connect("/ws/stream/cam1?token=valid&format=fmp4") as ws,
+        ):
+            ws.receive_json()
+            ws.receive_bytes()
+            assert ws.receive_json() == {
+                "type": "detections",
+                "width": 0,
+                "height": 0,
+                "boxes": [],
+            }
+
+    def test_closes_once_the_camera_is_removed(self) -> None:
+        with (
+            TestClient(_app_with_valid_token()) as client,
+            client.websocket_connect("/ws/stream/cam1?token=valid&format=fmp4") as ws,
+        ):
+            ws.receive_json()
+            ws.receive_bytes()
+            ws.receive_json()
+            ws.receive_bytes()
+            del state_module.live_feeds["cam1"]
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_bytes()
+            assert exc_info.value.code == 1001
+
+    def test_camera_without_live_feed_is_rejected(self) -> None:
+        state_module.live_feeds.clear()
+        client = TestClient(_app_with_valid_token())
+        with (
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            client.websocket_connect("/ws/stream/cam1?token=valid&format=fmp4") as ws,
+        ):
+            ws.receive_bytes()
+        assert exc_info.value.code == 1008
+
+    def test_default_format_is_still_mjpeg(self) -> None:
+        client = TestClient(_app_with_valid_token())
+        with client.websocket_connect("/ws/stream/cam1?token=valid") as ws:
+            assert ws.receive_bytes()[:2] == b"\xff\xd8"
+
+
+class TestStreamTokenVideoMime:
+    def test_token_announces_the_live_stream_codec(self) -> None:
+        feed = LiveFeed()
+        open_feed(feed)
+        feed.on_packet(packet(1, keyframe=True))
+        state_module.live_feeds["cam1"] = feed
+        app = FastAPI()
+        app.include_router(stream_router.router)
+        app.dependency_overrides[require_can_view] = lambda: _USER
+        app.dependency_overrides[enforce_wan_access_gate] = lambda: None
+        token_service = MagicMock()
+        token_service.issue.return_value = "signed.jwt.token"
+        app.dependency_overrides[get_stream_token_service] = lambda: token_service
+        app.dependency_overrides[get_security_settings] = lambda: _SETTINGS
+        try:
+            res = TestClient(app).post("/api/stream/cam1/token")
+        finally:
+            state_module.live_feeds.clear()
+        assert res.json()["video_mime"] == INIT.mime

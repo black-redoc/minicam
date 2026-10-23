@@ -28,7 +28,7 @@ Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unle
 | `GET` | `/api/me/cameras` | session | Cameras the caller can view, as JSON (mobile apps) |
 | `GET` | `/api/mobile/access-handoff?state=` | WAN + Cloudflare Access | Hand the Access token to the mobile app (`302` to `minicam://`) |
 | `POST` | `/api/stream/{camera_name}/token` | session + `can_view` | Issue a short-lived WebSocket stream token |
-| `WS` | `/ws/stream/{camera_name}?token=` | stream token | Binary JPEG stream |
+| `WS` | `/ws/stream/{camera_name}?token=[&format=fmp4]` | stream token | Live stream: JPEG frames, or the camera's own video as fMP4 |
 | `POST` | `/api/ptz/{camera_name}/{action}` | session + `can_use_ptz` | PTZ move/stop |
 | `GET` | `/api/cameras` | admin | List all cameras |
 | `GET` | `/api/cameras/{name}` | admin | Get single camera |
@@ -254,8 +254,10 @@ Requires a session with `can_view` on `camera_name` (and, off-LAN, an active WAN
 
 **Response `200`:**
 ```json
-{ "token": "<jwt>", "expires_in": 30 }
+{ "token": "<jwt>", "expires_in": 30, "video_mime": "video/mp4; codecs=\"hvc1.1.6.L90\"" }
 ```
+
+`video_mime` is the camera's live video codec for `format=fmp4`, or `null` while it isn't known yet.
 
 **Response `401`** (no session) / **`403`** (WAN access gate closed) / **`404`** (no `can_view` permission on this camera). See [Video Streaming](/doc/stream) for the full handshake and the `WS /ws/stream/{camera_name}?token=` endpoint.
 

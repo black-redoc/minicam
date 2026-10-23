@@ -55,7 +55,7 @@ def _stable_hash(class_name: str) -> int:
     return zlib.crc32(class_name.encode("utf-8"))
 
 
-def _color_for_class(class_name: str) -> tuple[int, int, int]:
+def color_for_class(class_name: str) -> tuple[int, int, int]:
     """Return a deterministic RGB color for a detection's class name."""
     explicit_color = _CLASS_COLORS.get(class_name)
     if explicit_color is not None:
@@ -111,7 +111,7 @@ def _draw_box_border(
     x1, x2 = min(x1, x2), max(x1, x2)
     y1, y2 = min(y1, y2), max(y1, y2)
 
-    color = _color_for_class(detection.class_name)
+    color = color_for_class(detection.class_name)
     # Cap the border thickness for boxes smaller than 2x the default
     # thickness, so the top/bottom (or left/right) strips never overlap
     # past the box's own extent.

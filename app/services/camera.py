@@ -4,23 +4,29 @@ import logging
 import random
 import threading
 import time
+from collections.abc import Callable
 from fractions import Fraction
 from pathlib import Path
-from typing import cast
+from typing import TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import av
 from av.codec.context import Flags
 from av.container import OutputContainer
+from av.video.stream import VideoStream
 
 from app.buffers.frame_buffer import FrameBuffer
 from app.services.av_io import av_io_lock
 from app.services.decoder import decode_video_frame
+from app.services.live.feed import LiveFeed
+from app.services.live.fmp4 import Fmp4Segmenter
 from app.services.recording.packets import EncodedPacket
 from app.services.recording.recorder import CameraRecorder
 from app.services.recording.writer import open_output
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 _RTSP_OPTIONS: dict[str, str] = {
     "rtsp_transport": "tcp",
@@ -87,6 +93,7 @@ class RTSPCamera:
         buffer: The FrameBuffer to push frames into.
         name: Camera name, used for the capture thread's name.
         recorder: Receives every demuxed packet for event recording, if any.
+        live_feed: Receives every demuxed packet for live fMP4 viewing, if any.
     """
 
     def __init__(
@@ -95,6 +102,7 @@ class RTSPCamera:
         buffer: FrameBuffer,
         name: str = "camera",
         recorder: CameraRecorder | None = None,
+        live_feed: LiveFeed | None = None,
     ) -> None:
         self._name = name
         self._rtsp_url = rtsp_url
@@ -103,6 +111,7 @@ class RTSPCamera:
         self._log_url = redact_url(rtsp_url)
         self._buffer = buffer
         self._recorder = recorder
+        self._live_feed = live_feed
         self._running = False
         self._connected = False
         self._sequence = 0
@@ -242,9 +251,12 @@ class RTSPCamera:
             video_stream.codec_context.thread_count = 2
 
         recorder = self._recorder
+        live_feed = self._live_feed
         time_base = cast(Fraction, video_stream.time_base)
         if recorder is not None:
             recorder.on_stream_opened(self._open_clip_output)
+        if live_feed is not None:
+            live_feed.on_stream_opened(self._open_live_output)
         try:
             self._connected = True
             logger.info("RTSP stream opened: %s", self._log_url)
@@ -261,19 +273,35 @@ class RTSPCamera:
                     self._sequence += 1
                     self._buffer.write(frame)
                     self._got_frame = True
+                if recorder is None and live_feed is None:
+                    continue
+                encoded = EncodedPacket.from_av(packet, time_base, time.monotonic())
+                if encoded is None:
+                    continue
                 if recorder is not None:
-                    encoded = EncodedPacket.from_av(packet, time_base, time.monotonic())
-                    if encoded is not None:
-                        recorder.on_packet(encoded)
+                    recorder.on_packet(encoded)
+                if live_feed is not None:
+                    live_feed.on_packet(encoded)
         finally:
             if recorder is not None:
                 recorder.on_stream_closed()
+            if live_feed is not None:
+                live_feed.on_stream_closed()
             self._close_container()
             self._connected = False
 
     def _open_clip_output(self, path: Path) -> OutputContainer | None:
         """Open an MP4 output copying the live video stream's codec, or None
-        if the input is already closed or the camera is stopping.
+        if the input is already closed or the camera is stopping."""
+        return self._with_video_template(lambda template: open_output(path, template))
+
+    def _open_live_output(self) -> Fmp4Segmenter | None:
+        """Open the fMP4 segmenter for live viewing, or None if the input is
+        already closed or the camera is stopping."""
+        return self._with_video_template(Fmp4Segmenter.open)
+
+    def _with_video_template(self, open_with: Callable[[VideoStream], _T]) -> _T | None:
+        """Run open_with on the input's video stream while it is still open.
 
         Called from the capture thread, the only one that closes the input
         container while it runs (see stop()).
@@ -282,4 +310,4 @@ class RTSPCamera:
             container = self._container
             if container is None or not self._running:
                 return None
-            return open_output(path, container.streams.video[0])
+            return open_with(container.streams.video[0])

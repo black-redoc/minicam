@@ -4,8 +4,9 @@ Content-Security-Policy allows the Tailwind CDN script and the small inline
 bootstrap scripts already used in app/templates (see base.html/home.html/
 login.html) plus data:/blob: images — the blank-frame placeholder and the
 live camera frames in app/static/js/grid.js and stream.js render through
-those schemes. Tightening this further (nonces, dropping the CDN, self-
-hosting Tailwind) is a template-level change out of scope here.
+those schemes — and blob: media, the MediaSource URL that stream.js plays
+the camera's fMP4 video through. Tightening this further (nonces, dropping
+the CDN, self-hosting Tailwind) is a template-level change out of scope here.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ _CONTENT_SECURITY_POLICY = (
     "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: blob:; "
+    "media-src 'self' blob:; "
     "connect-src 'self'; "
     "frame-ancestors 'none'"
 )

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 import time
 import weakref
+from typing import Any, Literal
 
 import numpy as np
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
@@ -20,13 +22,19 @@ from app.models.domain import User
 from app.models.frame import Frame
 from app.security_settings import SecuritySettings, get_security_settings
 from app.services.detection.base import Detection
-from app.services.detection.draw import draw_detections
+from app.services.detection.draw import color_for_class, draw_detections
 from app.services.encoder import encode_jpeg
+from app.services.live.feed import LiveFeed
+from app.services.live.fmp4 import InitSegment
 from app.services.shared_encoder import SharedJpegEncoder
 from app.services.stream_tokens import InvalidStreamTokenError, StreamTokenService
 
 router = APIRouter(tags=["stream"])
 logger = logging.getLogger(__name__)
+
+# How often an fMP4 viewer's detection boxes are refreshed when no video
+# arrives in between (they are checked after every fragment as well).
+_DETECTION_POLL_SECONDS = 0.25
 
 # One encoder per camera buffer, dropped automatically with the buffer when
 # the camera is removed or re-created by the setup router.
@@ -89,8 +97,11 @@ async def issue_stream_token(
     token = stream_token_service.issue(
         user.id, camera_name, settings.stream_token_ttl_seconds
     )
+    feed = state.live_feeds.get(camera_name)
     return StreamTokenResponse(
-        token=token, expires_in=settings.stream_token_ttl_seconds
+        token=token,
+        expires_in=settings.stream_token_ttl_seconds,
+        video_mime=feed.mime if feed is not None else None,
     )
 
 
@@ -100,11 +111,14 @@ async def stream(
     camera_name: str,
     token: str = Query(...),
     stream_token_service: StreamTokenService = Depends(get_stream_token_service),
+    format: Literal["mjpeg", "fmp4"] = Query("mjpeg"),
 ) -> None:
-    """Stream JPEG frames to the browser over WebSocket.
+    """Stream the camera to the browser over WebSocket.
 
-    Waits on the FrameBuffer registered for camera_name and sends each new
-    frame as binary JPEG; frames this viewer was too slow for are skipped.
+    format=fmp4 sends the camera's own compressed video as fragmented MP4
+    (see _stream_fmp4). The default, format=mjpeg, waits on the FrameBuffer
+    registered for camera_name and sends each new frame as binary JPEG;
+    frames this viewer was too slow for are skipped.
     Every frame is encoded once per camera and shared by all its viewers
     (SharedJpegEncoder), with the camera's detection boxes drawn on top
     when there is an unexpired snapshot — that snapshot may lag slightly
@@ -126,21 +140,24 @@ async def stream(
         await websocket.close(code=1008)
         return
 
+    feed = state.live_feeds.get(camera_name)
+    if format == "fmp4" and feed is None:
+        logger.warning("Stream rejected — no live feed: %s", camera_name)
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     logger.info(
-        "Stream client connected: camera=%s client=%s", camera_name, websocket.client
+        "Stream client connected: camera=%s client=%s format=%s",
+        camera_name,
+        websocket.client,
+        format,
     )
-    encoder = _encoder_for(buf)
-    render = functools.partial(_render_frame, camera_name)
-    last_frame: Frame | None = None
-
     try:
-        while True:
-            frame = await buf.next_frame(last_frame)
-            jpeg = await encoder.encode(frame, render)
-            await websocket.send_bytes(jpeg)
-            last_frame = frame
-
+        if feed is not None and format == "fmp4":
+            await _stream_fmp4(websocket, camera_name, feed)
+        else:
+            await _stream_mjpeg(websocket, camera_name, buf)
     except WebSocketDisconnect as exc:
         logger.info(
             "Stream client disconnected: camera=%s code=%s", camera_name, exc.code
@@ -148,3 +165,75 @@ async def stream(
     except Exception:
         logger.exception("Stream error: camera=%s", camera_name)
         raise
+
+
+async def _stream_mjpeg(
+    websocket: WebSocket, camera_name: str, buf: FrameBuffer
+) -> None:
+    encoder = _encoder_for(buf)
+    render = functools.partial(_render_frame, camera_name)
+    last_frame: Frame | None = None
+    while True:
+        frame = await buf.next_frame(last_frame)
+        jpeg = await encoder.encode(frame, render)
+        await websocket.send_bytes(jpeg)
+        last_frame = frame
+
+
+async def _stream_fmp4(websocket: WebSocket, camera_name: str, feed: LiveFeed) -> None:
+    """Send the camera's own video as fragmented MP4, plus its detections.
+
+    Messages, in order: a JSON text {"type": "init", "mime": ...} followed
+    by the binary init segment (again whenever the camera reconnects), then
+    one binary fragment per frame. Detection boxes can't be drawn into
+    compressed video, so they arrive as JSON text messages
+    {"type": "detections", ...} for the client to draw. Ends (code 1001)
+    once the camera is removed or renamed.
+    """
+    sent_detections: dict[str, Any] | None = None
+    with feed.subscribe() as subscription:
+        while state.live_feeds.get(camera_name) is feed:
+            try:
+                message = await asyncio.wait_for(
+                    subscription.next(), _DETECTION_POLL_SECONDS
+                )
+            except TimeoutError:
+                message = None
+            if isinstance(message, InitSegment):
+                await websocket.send_json({"type": "init", "mime": message.mime})
+            if message is not None:
+                await websocket.send_bytes(message.data)
+            detections = _detections_message(camera_name)
+            if detections != sent_detections:
+                await websocket.send_json(detections)
+                sent_detections = detections
+    await websocket.close(code=1001)
+
+
+def _detections_message(camera_name: str) -> dict[str, Any]:
+    """The camera's current, unexpired detections, in frame pixels."""
+    snapshot = state.detection_results.get(camera_name)
+    detections = (
+        snapshot.detections
+        if snapshot is not None and not snapshot.is_expired(time.monotonic())
+        else []
+    )
+    buf = state.frame_buffers.get(camera_name)
+    frame = buf.read() if buf is not None else None
+    return {
+        "type": "detections",
+        "width": frame.width if frame is not None else 0,
+        "height": frame.height if frame is not None else 0,
+        "boxes": [
+            {
+                "label": d.class_name,
+                "confidence": round(d.confidence, 2),
+                "color": "#{:02x}{:02x}{:02x}".format(*color_for_class(d.class_name)),
+                "x1": d.x1,
+                "y1": d.y1,
+                "x2": d.x2,
+                "y2": d.y2,
+            }
+            for d in detections
+        ],
+    }
