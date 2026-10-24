@@ -5,6 +5,7 @@ import functools
 import logging
 import time
 import weakref
+from collections.abc import Coroutine
 from typing import Any, Literal
 
 import numpy as np
@@ -45,6 +46,8 @@ logger = logging.getLogger(__name__)
 # How often an fMP4 viewer's detection boxes are refreshed when no video
 # arrives in between (they are checked after every fragment as well).
 _DETECTION_POLL_SECONDS = 0.25
+# After a failed write, how long to wait for the disconnect it may stem from.
+_DISCONNECT_GRACE_SECONDS = 1.0
 
 # One encoder per camera buffer, dropped automatically with the buffer when
 # the camera is removed or re-created by the setup router.
@@ -180,9 +183,10 @@ async def stream(
     )
     try:
         if feed is not None and format == "fmp4":
-            await _stream_fmp4(websocket, camera_name, feed, audio)
+            sender = _stream_fmp4(websocket, camera_name, feed, audio)
         else:
-            await _stream_mjpeg(websocket, camera_name, buf)
+            sender = _stream_mjpeg(websocket, camera_name, buf)
+        await _run_until_disconnect(websocket, sender)
     except WebSocketDisconnect as exc:
         logger.info(
             "Stream client disconnected: camera=%s code=%s", camera_name, exc.code
@@ -190,6 +194,46 @@ async def stream(
     except Exception:
         logger.exception("Stream error: camera=%s", camera_name)
         raise
+
+
+async def _run_until_disconnect(
+    websocket: WebSocket, sender: Coroutine[Any, Any, None]
+) -> None:
+    """Run sender until it ends or the client disconnects, whichever is first.
+
+    The senders never read from the socket, so on their own they only notice
+    a gone client when a write fails, and never while they wait for a frame
+    (stalled camera): reading here prunes those orphans at once. Raises
+    WebSocketDisconnect when the client left, also when sender failed first
+    writing to the closed connection (uvloop raises RuntimeError there).
+    """
+    send_task = asyncio.create_task(sender)
+    disconnect_task = asyncio.create_task(_wait_for_disconnect(websocket))
+    tasks = (send_task, disconnect_task)
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        if not disconnect_task.done() and send_task.exception() is not None:
+            await asyncio.wait({disconnect_task}, timeout=_DISCONNECT_GRACE_SECONDS)
+    finally:
+        for task in tasks:
+            task.cancel()
+        # Not gather: anyio's cancel scope (Starlette's TestClient) keeps
+        # cancelling a task while it waits on a cancelled gather, and the
+        # extra cancellations leak out of the scope.
+        await asyncio.wait(tasks)
+    if not disconnect_task.cancelled():
+        if not send_task.cancelled():
+            send_task.exception()  # retrieved: the client leaving explains it
+        raise WebSocketDisconnect(code=disconnect_task.result())
+    send_task.result()
+
+
+async def _wait_for_disconnect(websocket: WebSocket) -> int:
+    """Read (and ignore) client messages until it disconnects; its close code."""
+    while True:
+        message = await websocket.receive()
+        if message["type"] == "websocket.disconnect":
+            return int(message.get("code", 1000))
 
 
 async def _stream_mjpeg(
