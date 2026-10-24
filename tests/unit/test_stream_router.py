@@ -1,4 +1,8 @@
+import asyncio
+import logging
 import time
+from collections.abc import Iterator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -152,10 +156,26 @@ class TestWebSocketStreamErrorHandling:
     unreliably to hit through TestClient.
     """
 
-    def _make_mock_websocket(self) -> MagicMock:
+    @pytest.fixture(autouse=True)
+    def _no_disconnect_grace(self) -> Iterator[None]:
+        with patch.object(stream_router, "_DISCONNECT_GRACE_SECONDS", 0):
+            yield
+
+    def _make_mock_websocket(
+        self, disconnected: asyncio.Event | None = None
+    ) -> MagicMock:
+        """receive() reports a disconnect (code 1006) once disconnected is
+        set; never, without it."""
+        disconnected = disconnected or asyncio.Event()
+
+        async def receive() -> dict[str, Any]:
+            await disconnected.wait()
+            return {"type": "websocket.disconnect", "code": 1006}
+
         ws = MagicMock()
         ws.accept = AsyncMock()
         ws.client = ("127.0.0.1", 12345)
+        ws.receive = AsyncMock(side_effect=receive)
         return ws
 
     async def test_websocket_disconnect_is_logged_and_swallowed(self) -> None:
@@ -188,6 +208,85 @@ class TestWebSocketStreamErrorHandling:
                 )
         finally:
             state_module.frame_buffers.clear()
+
+    async def test_client_disconnect_stops_an_idle_sender(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        state_module.frame_buffers["cam1"] = FrameBuffer()  # no frame ever comes
+        disconnected = asyncio.Event()
+        disconnected.set()
+        ws = self._make_mock_websocket(disconnected)
+
+        try:
+            with caplog.at_level(logging.INFO, logger=stream_router.__name__):
+                await asyncio.wait_for(
+                    stream_router.stream(
+                        ws, "cam1", "valid", _accepting_stream_token_service()
+                    ),
+                    timeout=1,
+                )
+        finally:
+            state_module.frame_buffers.clear()
+        assert "Stream client disconnected: camera=cam1 code=1006" in caplog.text
+        ws.send_bytes.assert_not_called()
+
+    async def test_send_on_closed_transport_is_treated_as_disconnect(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # uvicorn writes to a transport the client already closed; the
+        # disconnect reaches receive() only right after the failed write.
+        state_module.frame_buffers["cam1"] = _buffer_with(_make_frame(sequence=1))
+        disconnected = asyncio.Event()
+        ws = self._make_mock_websocket(disconnected)
+
+        async def send_on_closed_transport(_data: bytes) -> None:
+            disconnected.set()
+            raise RuntimeError(
+                "unable to perform operation on <TCPTransport closed=True>; "
+                "the handler is closed"
+            )
+
+        ws.send_bytes = AsyncMock(side_effect=send_on_closed_transport)
+
+        try:
+            with (
+                patch.object(stream_router, "_DISCONNECT_GRACE_SECONDS", 1),
+                caplog.at_level(logging.INFO, logger=stream_router.__name__),
+            ):
+                await stream_router.stream(
+                    ws, "cam1", "valid", _accepting_stream_token_service()
+                )  # must not raise
+        finally:
+            state_module.frame_buffers.clear()
+        assert "Stream client disconnected: camera=cam1 code=1006" in caplog.text
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    async def test_orphan_is_pruned_while_feed_is_idle(self) -> None:
+        state_module.frame_buffers["cam1"] = FrameBuffer()
+        feed = LiveFeed()  # never emits: the camera is stalled
+        state_module.live_feeds["cam1"] = feed
+        disconnected = asyncio.Event()
+        ws = self._make_mock_websocket(disconnected)
+        ws.send_json = AsyncMock()
+
+        try:
+            task = asyncio.create_task(
+                stream_router.stream(
+                    ws,
+                    "cam1",
+                    "valid",
+                    _accepting_stream_token_service(),
+                    format="fmp4",
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert feed._video._subscribers  # the viewer is subscribed
+            disconnected.set()
+            await asyncio.wait_for(task, timeout=1)
+            assert not feed._video._subscribers
+        finally:
+            state_module.frame_buffers.clear()
+            state_module.live_feeds.clear()
 
 
 class TestWebSocketStreamDetectionOverlay:
