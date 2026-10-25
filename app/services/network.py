@@ -11,7 +11,7 @@ from __future__ import annotations
 import ipaddress
 from enum import StrEnum
 
-from fastapi import Request
+from starlette.requests import HTTPConnection
 
 
 class NetworkZone(StrEnum):
@@ -20,7 +20,7 @@ class NetworkZone(StrEnum):
 
 
 def classify_network(
-    request: Request, trusted_proxies: frozenset[str] = frozenset()
+    request: HTTPConnection, trusted_proxies: frozenset[str] = frozenset()
 ) -> NetworkZone:
     """Classify the request's origin.
 

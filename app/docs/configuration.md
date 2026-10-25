@@ -18,7 +18,6 @@ onvif_port = 80
 user = "admin"
 password = "secret"
 channel = 1
-stream = "main"
 
 [[cameras]]
 name = "patio"
@@ -28,7 +27,6 @@ onvif_port = 80
 user = "admin"
 password = "secret"
 channel = 1
-stream = "sub"
 ```
 
 ## `[app]` section
@@ -52,7 +50,6 @@ Each `[[cameras]]` block defines one IP camera. You may add as many as needed.
 | `user` | string | no | `"admin"` | Camera login username |
 | `password` | string | no | `""` | Camera login password |
 | `channel` | integer | no | `1` | Channel number (1 for single-channel cameras) |
-| `stream` | string | no | `"main"` | `"main"` for HD stream, `"sub"` for sub-stream |
 | `detection_classes` | list of strings | no | `[]` | Object classes to detect and box. See [Object Detection](/doc/detection) |
 | `notifications` | string | no | `"inherit"` | `"inherit"` follows `[notifications] enabled`; `"on"`/`"off"` override it for this camera. See [Detection Notifications](/doc/notifications) |
 
@@ -81,13 +78,19 @@ Edited from the Admin page. See [Event Recordings](/doc/recordings).
 The RTSP URL is built automatically from the camera fields:
 
 ```
-rtsp://{user}:{password}@{host}:{rtsp_port}/h264/ch{channel}/{stream}/av_stream
+rtsp://{user}:{password}@{host}:{rtsp_port}/h264/ch{channel}/sub/av_stream
 ```
+
+minicam always uses the camera's **sub-stream**, for live view, detection and
+recordings alike: it is a fraction of the main stream's bitrate, which keeps
+remote viewing light on the home uplink. Set the sub-stream's resolution, frame rate and
+bitrate in the camera's own settings. A `stream` key left in an older
+`config.toml` is ignored.
 
 For example, with the `entrada` camera above:
 
 ```
-rtsp://admin:secret@192.168.1.100:554/h264/ch1/main/av_stream
+rtsp://admin:secret@192.168.1.100:554/h264/ch1/sub/av_stream
 ```
 
 > **Note:** This URL format is compatible with most Hikvision-compatible IPCAM firmware. If your camera uses a different path, you can override `rtsp_url` directly (not yet exposed in the UI).

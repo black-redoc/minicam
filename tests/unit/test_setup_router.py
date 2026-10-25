@@ -179,7 +179,6 @@ class TestCreateCamera:
         "user": "admin",
         "password": "pass",
         "channel": 1,
-        "stream": "main",
     }
 
     def test_returns_201(self, client: TestClient) -> None:
@@ -227,7 +226,6 @@ class TestEditCamera:
         "user": "admin",
         "password": "newpass",
         "channel": 1,
-        "stream": "main",
     }
 
     def test_returns_200(self, client: TestClient) -> None:
@@ -461,7 +459,6 @@ class TestCreateCameraDetectionHook:
         "user": "admin",
         "password": "pass",
         "channel": 1,
-        "stream": "main",
         "detection_classes": ["person"],
     }
 
@@ -509,7 +506,6 @@ class TestEditCameraDetectionHook:
         "user": "admin",
         "password": "newpass",
         "channel": 1,
-        "stream": "main",
         "detection_classes": ["person"],
     }
 

@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 from httpx import Response
+from starlette.datastructures import Address
 
 import app.state as state_module
 from app.buffers.frame_buffer import FrameBuffer
@@ -27,6 +28,7 @@ from app.routers import stream as stream_router
 from app.security_settings import SecuritySettings
 from app.services.detection.base import Detection
 from app.services.detection.worker import DetectionSnapshot
+from app.services.encoder import JPEG_QUALITY, WAN_JPEG_QUALITY
 from app.services.live.feed import LiveFeed
 from app.services.stream_tokens import InvalidStreamTokenError, StreamTokenPayload
 from tests.fixtures.live import AUDIO_INIT, INIT, open_feed, packet
@@ -174,7 +176,7 @@ class TestWebSocketStreamErrorHandling:
 
         ws = MagicMock()
         ws.accept = AsyncMock()
-        ws.client = ("127.0.0.1", 12345)
+        ws.client = Address("127.0.0.1", 12345)
         ws.receive = AsyncMock(side_effect=receive)
         return ws
 
@@ -188,7 +190,11 @@ class TestWebSocketStreamErrorHandling:
 
         try:
             await stream_router.stream(
-                ws, "cam1", "valid", _accepting_stream_token_service()
+                ws,
+                "cam1",
+                "valid",
+                _accepting_stream_token_service(),
+                settings=_SETTINGS,
             )  # must not raise
         finally:
             state_module.frame_buffers.clear()
@@ -204,7 +210,11 @@ class TestWebSocketStreamErrorHandling:
         try:
             with pytest.raises(RuntimeError, match="socket blew up"):
                 await stream_router.stream(
-                    ws, "cam1", "valid", _accepting_stream_token_service()
+                    ws,
+                    "cam1",
+                    "valid",
+                    _accepting_stream_token_service(),
+                    settings=_SETTINGS,
                 )
         finally:
             state_module.frame_buffers.clear()
@@ -221,7 +231,11 @@ class TestWebSocketStreamErrorHandling:
             with caplog.at_level(logging.INFO, logger=stream_router.__name__):
                 await asyncio.wait_for(
                     stream_router.stream(
-                        ws, "cam1", "valid", _accepting_stream_token_service()
+                        ws,
+                        "cam1",
+                        "valid",
+                        _accepting_stream_token_service(),
+                        settings=_SETTINGS,
                     ),
                     timeout=1,
                 )
@@ -254,7 +268,11 @@ class TestWebSocketStreamErrorHandling:
                 caplog.at_level(logging.INFO, logger=stream_router.__name__),
             ):
                 await stream_router.stream(
-                    ws, "cam1", "valid", _accepting_stream_token_service()
+                    ws,
+                    "cam1",
+                    "valid",
+                    _accepting_stream_token_service(),
+                    settings=_SETTINGS,
                 )  # must not raise
         finally:
             state_module.frame_buffers.clear()
@@ -347,7 +365,7 @@ class TestWebSocketStreamDetectionOverlay:
         draw_args = mock_draw.call_args.args
         assert draw_args[0] is frame.image
         assert draw_args[1] == [detection]
-        mock_encode.assert_called_once_with(drawn_image)
+        mock_encode.assert_called_once_with(drawn_image, quality=WAN_JPEG_QUALITY)
 
     def test_snapshot_with_empty_detections_skips_drawing(self) -> None:
         frame = _make_frame(sequence=1)
@@ -394,6 +412,78 @@ class TestWebSocketStreamDetectionOverlay:
 
         mock_draw.assert_not_called()
         assert mock_encode.call_args.args[0] is frame.image
+
+
+class TestWebSocketStreamMjpegWan:
+    """Outside the LAN, MJPEG is encoded lighter and capped in frame rate."""
+
+    def teardown_method(self) -> None:
+        state_module.frame_buffers.clear()
+
+    def _encode_quality(self, client_ip: str) -> int:
+        state_module.frame_buffers["cam1"] = _buffer_with(_make_frame(sequence=1))
+        client = TestClient(_app_with_valid_token(), client=(client_ip, 12345))
+        with patch.object(
+            stream_router, "encode_jpeg", return_value=b"jpeg"
+        ) as mock_encode:
+            with client.websocket_connect("/ws/stream/cam1?token=valid") as ws:
+                ws.receive_bytes()
+        return int(mock_encode.call_args.kwargs["quality"])
+
+    def test_lan_viewer_gets_full_quality(self) -> None:
+        assert self._encode_quality("192.168.1.50") == JPEG_QUALITY
+
+    def test_wan_viewer_gets_lower_quality(self) -> None:
+        assert self._encode_quality("8.8.8.8") == WAN_JPEG_QUALITY
+
+    def test_lan_and_wan_viewers_get_separate_encodes(self) -> None:
+        state_module.frame_buffers["cam1"] = _buffer_with(_make_frame(sequence=1))
+        app = _app_with_valid_token()
+        with (
+            patch.object(
+                stream_router, "encode_jpeg", return_value=b"jpeg"
+            ) as mock_encode,
+            TestClient(app, client=("192.168.1.50", 1)) as lan,
+            TestClient(app, client=("8.8.8.8", 1)) as wan,
+        ):
+            with lan.websocket_connect("/ws/stream/cam1?token=valid") as ws:
+                ws.receive_bytes()
+            with wan.websocket_connect("/ws/stream/cam1?token=valid") as ws:
+                ws.receive_bytes()
+        qualities = sorted(c.kwargs["quality"] for c in mock_encode.call_args_list)
+        assert qualities == sorted([JPEG_QUALITY, WAN_JPEG_QUALITY])
+
+    async def _frames_sent_in(self, seconds: float, wan: bool) -> int:
+        buf = FrameBuffer()
+        ws = MagicMock()
+        ws.send_bytes = AsyncMock()
+
+        async def produce() -> None:
+            sequence = 0
+            while True:
+                buf.write(_make_frame(sequence=sequence))
+                sequence += 1
+                await asyncio.sleep(0.005)
+
+        producer = asyncio.create_task(produce())
+        with patch.object(stream_router, "encode_jpeg", return_value=b"jpeg"):
+            sender = asyncio.create_task(
+                stream_router._stream_mjpeg(ws, "cam1", buf, wan)
+            )
+            await asyncio.sleep(seconds)
+        for task in (producer, sender):
+            task.cancel()
+        await asyncio.wait({producer, sender})
+        return int(ws.send_bytes.await_count)
+
+    async def test_wan_viewer_is_capped_in_frame_rate(self) -> None:
+        sent = await self._frames_sent_in(0.5, wan=True)
+        # 10 fps over 0.5 s: about 5 frames, never the ~100 produced.
+        assert 3 <= sent <= stream_router._WAN_MJPEG_MAX_FPS * 0.5 + 2
+
+    async def test_lan_viewer_is_not_capped(self) -> None:
+        sent = await self._frames_sent_in(0.5, wan=False)
+        assert sent > stream_router._WAN_MJPEG_MAX_FPS * 0.5 * 2
 
 
 class TestIssueStreamToken:

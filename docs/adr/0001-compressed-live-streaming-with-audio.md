@@ -60,8 +60,9 @@ Date: 2026-10-23
 1. fMP4 live video + MJPEG fallback + client-side detection boxes.
 2. Live audio on demand + `can_listen` (migration, admin UI, token claim).
 3. Audio in recordings + admin setting with the legal-notice dialog.
-4. Later, separate ADR: automatic main/sub stream switching on slow links
-   (needs a second RTSP session per camera).
+4. ~~Later, separate ADR: automatic main/sub stream switching on slow links
+   (needs a second RTSP session per camera).~~ Superseded by ADR 0002: the
+   sub-stream is always used.
 
 ## Alternatives considered
 - **Lower MJPEG quality/FPS on WAN (adaptive MJPEG):** small change, but it
