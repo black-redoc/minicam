@@ -133,11 +133,14 @@ class GridWidget {
                              text-white text-[10px] font-mono tabular-nums pointer-events-none">
                     -- FPS
                 </span>
+                <span class="absolute top-1 left-1 max-w-[60%] px-1.5 py-0.5 rounded bg-black/60
+                             text-white text-[10px] font-mono truncate pointer-events-none">
+                    ${name}
+                </span>
                 <div class="absolute bottom-0 left-0 right-0
                             bg-gradient-to-t from-black/70 to-transparent
                             px-2 py-1.5 pointer-events-none
-                            flex items-center justify-between gap-2">
-                    <span class="text-white text-xs font-mono truncate">${name}</span>
+                            flex items-center justify-end gap-2">
                     <span id="grid-badge-${i}" class="badge badge--connecting shrink-0">
                         <span data-label>Connecting…</span>
                     </span>
