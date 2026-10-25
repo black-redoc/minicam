@@ -19,6 +19,8 @@ from app.dependencies import (
     get_authorization_service,
     get_db_connection,
     get_security_settings,
+    get_session_jti,
+    get_stream_access_service,
     get_stream_token_service,
     require_can_view,
 )
@@ -30,6 +32,7 @@ from app.services.detection.base import Detection
 from app.services.detection.worker import DetectionSnapshot
 from app.services.encoder import JPEG_QUALITY, WAN_JPEG_QUALITY
 from app.services.live.feed import LiveFeed
+from app.services.network import NetworkZone
 from app.services.stream_tokens import InvalidStreamTokenError, StreamTokenPayload
 from tests.fixtures.live import AUDIO_INIT, INIT, open_feed, packet
 
@@ -43,6 +46,19 @@ _USER = User(
     updated_at="t",
 )
 _SETTINGS = SecuritySettings(jwt_secret="test-secret")
+
+
+def _granting_access() -> MagicMock:
+    """A fake StreamAccessService that always grants access: these tests are
+    about the stream loop (see tests/unit/test_stream_access.py for access)."""
+    access = MagicMock()
+    access.is_granted = AsyncMock(return_value=True)
+    return access
+
+
+def _grant_stream_access(app: FastAPI) -> None:
+    app.dependency_overrides[get_stream_access_service] = _granting_access
+    app.dependency_overrides[get_session_jti] = lambda: "sid-1"
 
 
 def _make_frame(sequence: int = 0) -> Frame:
@@ -67,6 +83,7 @@ def _accepting_stream_token_service() -> MagicMock:
 
 def _app_with_valid_token() -> FastAPI:
     test_app = FastAPI()
+    _grant_stream_access(test_app)
     test_app.include_router(stream_router.router)
     test_app.dependency_overrides[get_stream_token_service] = (
         _accepting_stream_token_service
@@ -142,6 +159,7 @@ class TestWebSocketStream:
         service = MagicMock()
         service.verify.side_effect = InvalidStreamTokenError("bad token")
         test_app = FastAPI()
+        _grant_stream_access(test_app)
         test_app.include_router(stream_router.router)
         test_app.dependency_overrides[get_stream_token_service] = lambda: service
         client = TestClient(test_app)
@@ -194,7 +212,8 @@ class TestWebSocketStreamErrorHandling:
                 "cam1",
                 "valid",
                 _accepting_stream_token_service(),
-                settings=_SETTINGS,
+                network_zone=NetworkZone.LAN,
+                access=_granting_access(),
             )  # must not raise
         finally:
             state_module.frame_buffers.clear()
@@ -214,7 +233,8 @@ class TestWebSocketStreamErrorHandling:
                     "cam1",
                     "valid",
                     _accepting_stream_token_service(),
-                    settings=_SETTINGS,
+                    network_zone=NetworkZone.LAN,
+                    access=_granting_access(),
                 )
         finally:
             state_module.frame_buffers.clear()
@@ -235,7 +255,8 @@ class TestWebSocketStreamErrorHandling:
                         "cam1",
                         "valid",
                         _accepting_stream_token_service(),
-                        settings=_SETTINGS,
+                        network_zone=NetworkZone.LAN,
+                        access=_granting_access(),
                     ),
                     timeout=1,
                 )
@@ -272,7 +293,8 @@ class TestWebSocketStreamErrorHandling:
                     "cam1",
                     "valid",
                     _accepting_stream_token_service(),
-                    settings=_SETTINGS,
+                    network_zone=NetworkZone.LAN,
+                    access=_granting_access(),
                 )  # must not raise
         finally:
             state_module.frame_buffers.clear()
@@ -295,6 +317,8 @@ class TestWebSocketStreamErrorHandling:
                     "valid",
                     _accepting_stream_token_service(),
                     format="fmp4",
+                    network_zone=NetworkZone.LAN,
+                    access=_granting_access(),
                 )
             )
             await asyncio.sleep(0.05)
@@ -490,6 +514,7 @@ class TestIssueStreamToken:
     @pytest.fixture
     def app(self) -> FastAPI:
         test_app = FastAPI()
+        _grant_stream_access(test_app)
         test_app.include_router(stream_router.router)
         test_app.dependency_overrides[get_db_connection] = lambda: MagicMock()
         self.authz = MagicMock()
@@ -522,7 +547,11 @@ class TestIssueStreamToken:
             "audio_mime": None,
         }
         stream_token_service.issue.assert_called_once_with(
-            _USER.id, "cam1", _SETTINGS.stream_token_ttl_seconds, audio=False
+            _USER.id,
+            "cam1",
+            _SETTINGS.stream_token_ttl_seconds,
+            audio=False,
+            session_jti="sid-1",
         )
 
     def test_returns_403_when_wan_gate_blocks(self, app: FastAPI) -> None:
@@ -659,6 +688,7 @@ class TestStreamTokenVideoMime:
         feed.on_packet(packet(1, keyframe=True))
         state_module.live_feeds["cam1"] = feed
         app = FastAPI()
+        _grant_stream_access(app)
         app.include_router(stream_router.router)
         app.dependency_overrides[require_can_view] = lambda: _USER
         app.dependency_overrides[enforce_wan_access_gate] = lambda: None
@@ -682,6 +712,7 @@ def _app_with_token(audio: bool) -> FastAPI:
         user_id=1, camera_name="cam1", audio=audio
     )
     test_app = FastAPI()
+    _grant_stream_access(test_app)
     test_app.include_router(stream_router.router)
     test_app.dependency_overrides[get_stream_token_service] = lambda: service
     return test_app
@@ -749,6 +780,7 @@ class TestStreamTokenAudio:
         self.token_service.issue.return_value = "signed.jwt.token"
         self.authz = MagicMock()
         self.app = FastAPI()
+        _grant_stream_access(self.app)
         self.app.include_router(stream_router.router)
         self.app.dependency_overrides[require_can_view] = lambda: _USER
         self.app.dependency_overrides[enforce_wan_access_gate] = lambda: None
@@ -783,5 +815,72 @@ class TestStreamTokenAudio:
         res = self._post(can_listen=True, query="?audio=true")
         assert res.status_code == 200
         self.token_service.issue.assert_called_once_with(
-            _USER.id, "cam1", _SETTINGS.stream_token_ttl_seconds, audio=True
+            _USER.id,
+            "cam1",
+            _SETTINGS.stream_token_ttl_seconds,
+            audio=True,
+            session_jti="sid-1",
         )
+
+
+class TestWebSocketStreamAccessRecheck:
+    """An open stream ends once its viewer's session or permissions do."""
+
+    def teardown_method(self) -> None:
+        state_module.frame_buffers.clear()
+
+    def _app(self, *granted: bool) -> tuple[FastAPI, MagicMock]:
+        access = MagicMock()
+        access.is_granted = AsyncMock(side_effect=[*granted, *[granted[-1]] * 100])
+        app = _app_with_valid_token()
+        app.dependency_overrides[get_stream_access_service] = lambda: access
+        return app, access
+
+    def test_handshake_is_rejected_without_access(self) -> None:
+        state_module.frame_buffers["cam1"] = _buffer_with(_make_frame(sequence=1))
+        app, _ = self._app(False)
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with TestClient(app).websocket_connect("/ws/stream/cam1?token=valid") as ws:
+                ws.receive_bytes()
+        assert exc_info.value.code == 1008
+
+    def test_open_stream_is_closed_once_access_is_revoked(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        state_module.frame_buffers["cam1"] = _buffer_with(_make_frame(sequence=1))
+        app, access = self._app(True, True, False)
+        with (
+            patch.object(stream_router, "_ACCESS_RECHECK_SECONDS", 0.01),
+            patch.object(stream_router, "encode_jpeg", return_value=b"jpeg"),
+            TestClient(app).websocket_connect("/ws/stream/cam1?token=valid") as ws,
+        ):
+            assert ws.receive_bytes() == b"jpeg"
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_bytes()
+        assert exc_info.value.code == 1008
+        assert access.is_granted.await_count >= 3
+        assert "Stream closed — access revoked: camera=cam1 user=1" in caplog.text
+
+    def test_wan_viewer_is_checked_as_wan(self) -> None:
+        state_module.frame_buffers["cam1"] = _buffer_with(_make_frame(sequence=1))
+        app, access = self._app(True)
+        client = TestClient(app, client=("8.8.8.8", 1))
+        with (
+            patch.object(stream_router, "encode_jpeg", return_value=b"jpeg"),
+            client.websocket_connect("/ws/stream/cam1?token=valid") as ws,
+        ):
+            ws.receive_bytes()
+        assert access.is_granted.await_args.args[1] is True
+
+    async def test_sender_failure_is_not_masked_by_the_check(self) -> None:
+        async def failing_sender() -> None:
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await stream_router._while_access_granted(
+                MagicMock(),
+                failing_sender(),
+                _granting_access(),
+                StreamTokenPayload(user_id=1, camera_name="cam1"),
+                wan=False,
+            )
