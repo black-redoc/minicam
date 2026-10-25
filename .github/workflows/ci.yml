@@ -65,14 +65,21 @@ jobs:
         run: sh .github/scripts/raspberry-pi-os-setup.sh
 
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          # Its cache and Python dirs live in root-owned /__w/_temp, which
+          # `pi` can't write: uv falls back to pi's home once they're unset.
+          enable-cache: false
 
       - name: Install dependencies
         run: |
           chown -R pi:pi .
-          runuser -u pi -- env HOME=/home/pi UV_CACHE_DIR=/home/pi/.cache/uv uv sync --locked
+          runuser -u pi -- env -u UV_CACHE_DIR -u UV_PYTHON_INSTALL_DIR HOME=/home/pi \
+            uv sync --locked
 
       - name: Pytest
-        run: runuser -u pi -- env HOME=/home/pi UV_CACHE_DIR=/home/pi/.cache/uv uv run pytest
+        run: |
+          runuser -u pi -- env -u UV_CACHE_DIR -u UV_PYTHON_INSTALL_DIR HOME=/home/pi \
+            uv run pytest
 
   js:
     name: JavaScript (lint, types)
