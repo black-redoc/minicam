@@ -22,6 +22,10 @@ _MAX_GOP_FRAGMENTS = 600
 # ~8 s of a 4 Mbit/s main stream: a viewer further behind than this skips
 # ahead to the next keyframe instead of falling further behind.
 _MAX_QUEUED_BYTES = 4 * 1024 * 1024
+# A rendition keeps remuxing this long after its last viewer leaves (or
+# after the stream opens, which is when its MIME type becomes known), so a
+# viewer that reconnects still starts at once from the buffered GOP.
+_IDLE_STOP_SECONDS = 10.0
 
 
 class LiveSubscription:
@@ -85,14 +89,16 @@ class _Rendition:
         self._gop: list[Fragment] = []
         self._subscribers: set[LiveSubscription] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Kept while the segmenter is stopped for lack of viewers.
+        self._mime: str | None = None
         # Capture thread only.
         self._opener: SegmenterOpener | None = None
         self._segmenter: Fmp4Segmenter | None = None
+        self._idle_since: float | None = None
 
     @property
     def mime(self) -> str | None:
-        init = self._init
-        return init.mime if init is not None else None
+        return self._mime
 
     def subscribe(self) -> LiveSubscription:
         subscription = LiveSubscription(self, self._max_queued_bytes)
@@ -111,18 +117,23 @@ class _Rendition:
 
     def on_stream_opened(self, opener: SegmenterOpener | None) -> None:
         self._opener = opener
+        self._idle_since = None
 
     def on_packet(self, packet: EncodedPacket) -> None:
+        if not self._wanted(packet.received_at):
+            if self._segmenter is not None:
+                self._stop()
+            return
         if self._segmenter is None:
             # Fragments must start at a video keyframe to be playable.
             if self._opener is None or not _is_video_keyframe(packet):
                 return
-            opener, self._opener = self._opener, None
             try:
-                self._segmenter = opener()
+                self._segmenter = self._opener()
             except Exception as exc:
                 logger.error("Live stream unavailable: %s: %s", type(exc).__name__, exc)
             if self._segmenter is None:
+                self._opener = None  # until the camera reconnects
                 return
 
         segmenter = self._segmenter
@@ -131,6 +142,7 @@ class _Rendition:
         except Exception as exc:
             # Until the camera reconnects: viewers fall back to MJPEG.
             logger.error("Live stream stopped: %s: %s", type(exc).__name__, exc)
+            self._opener = None
             self._close_segmenter()
             return
         if self._init is None and segmenter.init is not None:
@@ -140,6 +152,24 @@ class _Rendition:
 
     def on_stream_closed(self) -> None:
         self._opener = None
+        self._stop()
+        with self._lock:
+            self._mime = None
+
+    def _wanted(self, now: float) -> bool:
+        """Whether to remux now: with viewers, and until _IDLE_STOP_SECONDS
+        after the last one left or the stream opened."""
+        with self._lock:
+            has_viewers = bool(self._subscribers)
+        if has_viewers:
+            self._idle_since = None
+            return True
+        if self._idle_since is None:
+            self._idle_since = now
+        return now - self._idle_since < _IDLE_STOP_SECONDS
+
+    def _stop(self) -> None:
+        """Close the segmenter; a viewer restarts it at the next keyframe."""
         self._close_segmenter()
         with self._lock:
             self._init = None
@@ -159,6 +189,7 @@ class _Rendition:
         with self._lock:
             if isinstance(message, InitSegment):
                 self._init = message
+                self._mime = message.mime
                 self._gop = []
             elif message.is_keyframe:
                 self._gop = [message]
@@ -193,6 +224,11 @@ class LiveFeed:
     viewers subscribe on the event loop. A new viewer starts with the init
     segment and the fragments since the latest keyframe, so playback can
     begin immediately instead of waiting for the next keyframe.
+
+    Each rendition only remuxes while it has viewers, plus _IDLE_STOP_SECONDS
+    after the last one leaves or the stream opens (long enough to learn its
+    MIME type, which stays known until the camera disconnects). A viewer of
+    a stopped rendition gets its init segment at the next video keyframe.
     """
 
     def __init__(self, max_queued_bytes: int = _MAX_QUEUED_BYTES) -> None:
