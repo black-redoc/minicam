@@ -27,8 +27,7 @@ Send a `POST` to `/api/cameras` with a JSON body:
   "onvif_port": 80,
   "user": "admin",
   "password": "secret",
-  "channel": 1,
-  "stream": "main"
+  "channel": 1
 }
 ```
 
@@ -41,8 +40,7 @@ Send a `POST` to `/api/cameras` with a JSON body:
   "onvif_port": 80,
   "user": "admin",
   "password": "",
-  "channel": 1,
-  "stream": "main"
+  "channel": 1
 }
 ```
 
@@ -82,8 +80,7 @@ The camera thread is stopped, its buffer is released, and the entry is removed f
     "onvif_port": 80,
     "user": "admin",
     "password": "",
-    "channel": 1,
-    "stream": "main"
+    "channel": 1
   }
 ]
 ```

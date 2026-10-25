@@ -383,15 +383,6 @@ class ConfigWidget {
                     </div>
 
                     <div class="flex flex-col gap-1.5">
-                        <label for="cfg-stream"
-                               class="text-xs text-slate-400 font-medium">Stream</label>
-                        <select id="cfg-stream" name="stream" class="input-cfg">
-                            <option value="main">Main</option>
-                            <option value="sub">Sub</option>
-                        </select>
-                    </div>
-
-                    <div class="flex flex-col gap-1.5">
                         <span class="text-xs text-slate-400 font-medium">Object detection</span>
                         <div data-detection-classes aria-live="polite">
                             ${this.#spinnerHtml('Loading detection classes…')}
@@ -442,7 +433,6 @@ class ConfigWidget {
         f.querySelector('[name="onvif_port"]').value = camera.onvif_port ?? '';
         f.querySelector('[name="user"]').value       = camera.user       ?? '';
         f.querySelector('[name="channel"]').value    = camera.channel    ?? '';
-        f.querySelector('[name="stream"]').value     = camera.stream     ?? 'main';
         f.querySelector('[name="notifications"]').value = camera.notifications ?? 'inherit';
         // password is intentionally left blank — backend keeps existing value when empty
     }
@@ -502,7 +492,6 @@ class ConfigWidget {
             user:       f.querySelector('[name="user"]').value.trim(),
             password:   f.querySelector('[name="password"]').value,
             channel:    Number(f.querySelector('[name="channel"]').value),
-            stream:     f.querySelector('[name="stream"]').value,
             detection_classes: detectionClasses,
             notifications: f.querySelector('[name="notifications"]').value,
         };

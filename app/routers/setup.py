@@ -76,7 +76,6 @@ def _to_response(cam: CameraConfig) -> CameraConfigResponse:
         user=cam.user,
         password="",
         channel=cam.channel,
-        stream=cam.stream,
         detection_classes=cam.detection_classes,
         notifications=cam.notifications,
     )

@@ -25,7 +25,6 @@ _DEFAULTS: dict[str, str | int | bool] = {
     "CAMERA_USER": "admin",
     "CAMERA_PASSWORD": "",
     "CAMERA_CHANNEL": 1,
-    "CAMERA_STREAM": "main",
     "APP_HOST": "0.0.0.0",
     "APP_PORT": 8080,
     "DEBUG": False,
@@ -64,7 +63,6 @@ def _build_toml_doc(env: dict[str, str]) -> dict[str, object]:
                 "user": get("CAMERA_USER"),
                 "password": get("CAMERA_PASSWORD"),
                 "channel": int(get("CAMERA_CHANNEL")),
-                "stream": get("CAMERA_STREAM"),
             }
         ],
     }

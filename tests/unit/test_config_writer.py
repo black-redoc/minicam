@@ -52,7 +52,6 @@ def toml_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                     "user": "admin",
                     "password": "secret",
                     "channel": 1,
-                    "stream": "main",
                 }
             ],
         },

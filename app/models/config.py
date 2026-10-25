@@ -19,7 +19,6 @@ class CameraConfig(BaseModel):
     user: str = "admin"
     password: str = ""
     channel: int = 1
-    stream: Literal["main", "sub"] = "main"
     detection_classes: list[str] = Field(default_factory=list)
     notifications: NotificationMode = "inherit"
 
@@ -33,7 +32,7 @@ class CameraConfig(BaseModel):
         return (
             f"rtsp://{self.user}:{self.password}"
             f"@{self.host}:{self.rtsp_port}"
-            f"/h264/ch{self.channel}/{self.stream}/av_stream"
+            f"/h264/ch{self.channel}/sub/av_stream"
         )
 
 
@@ -85,7 +84,6 @@ class CameraConfigResponse(BaseModel):
     user: str
     password: str
     channel: int
-    stream: Literal["main", "sub"]
     detection_classes: list[str] = Field(default_factory=list)
     notifications: NotificationMode = "inherit"
 
@@ -100,7 +98,6 @@ class CameraConfigRequest(BaseModel):
     user: str = "admin"
     password: str = ""
     channel: int = Field(1, ge=1)
-    stream: Literal["main", "sub"] = "main"
     detection_classes: list[str] = Field(default_factory=list)
     notifications: NotificationMode = "inherit"
 

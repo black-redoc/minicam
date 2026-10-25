@@ -78,10 +78,6 @@ class TestCameraConfigDefaults:
         cam = _make_camera()
         assert cam.channel == 1
 
-    def test_default_stream(self) -> None:
-        cam = _make_camera()
-        assert cam.stream == "main"
-
     def test_default_detection_classes_is_empty(self) -> None:
         cam = _make_camera()
         assert cam.detection_classes == []
@@ -106,7 +102,6 @@ class TestDetectionClassesSerialization:
             user="admin",
             password="secret",
             channel=1,
-            stream="main",
         )
         assert response.detection_classes == []
 
@@ -119,7 +114,6 @@ class TestDetectionClassesSerialization:
             user="admin",
             password="secret",
             channel=1,
-            stream="main",
             detection_classes=["cat"],
         )
         assert response.detection_classes == ["cat"]
@@ -194,9 +188,16 @@ class TestRtspUrl:
         cam = _make_camera(channel=2)
         assert "/ch2/" in cam.rtsp_url
 
-    def test_url_contains_stream(self) -> None:
-        cam = _make_camera(stream="sub")
+    def test_url_always_uses_sub_stream(self) -> None:
+        cam = _make_camera()
+        assert "/ch1/sub/av_stream" in cam.rtsp_url
+
+    def test_legacy_stream_key_is_ignored(self) -> None:
+        cam = CameraConfig.model_validate(
+            {"name": "cam1", "host": "10.0.0.1", "stream": "main"}
+        )
         assert "/sub/" in cam.rtsp_url
+        assert "stream" not in cam.model_dump()
 
     def test_url_ends_with_av_stream(self) -> None:
         cam = _make_camera()
@@ -233,7 +234,6 @@ class TestGetConfig:
                         "user": "admin",
                         "password": "pass",
                         "channel": 1,
-                        "stream": "main",
                     }
                 ],
             },

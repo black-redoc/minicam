@@ -134,8 +134,7 @@ Returns list of all configured cameras. Passwords are omitted.
     "onvif_port": 80,
     "user": "admin",
     "password": "",
-    "channel": 1,
-    "stream": "main"
+    "channel": 1
   }
 ]
 ```
@@ -168,8 +167,7 @@ Add a new camera and start its RTSP capture / PTZ services.
   "onvif_port": 80,
   "user": "admin",
   "password": "secret",
-  "channel": 1,
-  "stream": "main"
+  "channel": 1
 }
 ```
 
@@ -184,8 +182,7 @@ Add a new camera and start its RTSP capture / PTZ services.
   "onvif_port": 80,
   "user": "admin",
   "password": "",
-  "channel": 1,
-  "stream": "main"
+  "channel": 1
 }
 ```
 
