@@ -44,6 +44,43 @@ jobs:
       - name: Pytest
         run: uv run pytest
 
+  raspberry-pi-os:
+    name: Raspberry Pi OS arm64 (tests)
+    # The device's userland, not its hardware or kernel (no 16 KB pages, no
+    # cameras, no accelerator): Debian trixie arm64 plus Raspberry Pi's apt
+    # repository, see .github/scripts/raspberry-pi-os-setup.sh. Tests run as
+    # the unprivileged `pi` user, like the systemd unit on the device.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    container:
+      image: debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+    env:
+      UV_PYTHON: "3.14"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Raspberry Pi OS
+        run: sh .github/scripts/raspberry-pi-os-setup.sh
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          # Its cache and Python dirs live in root-owned /__w/_temp, which
+          # `pi` can't write: uv falls back to pi's home once they're unset.
+          enable-cache: false
+
+      - name: Install dependencies
+        run: |
+          chown -R pi:pi .
+          runuser -u pi -- env -u UV_CACHE_DIR -u UV_PYTHON_INSTALL_DIR HOME=/home/pi \
+            uv sync --locked
+
+      - name: Pytest
+        run: |
+          runuser -u pi -- env -u UV_CACHE_DIR -u UV_PYTHON_INSTALL_DIR HOME=/home/pi \
+            uv run pytest
+
   js:
     name: JavaScript (lint, types)
     runs-on: ubuntu-latest
