@@ -55,6 +55,12 @@ uv run pytest
 npm ci --ignore-scripts && npm run lint && npm run typecheck
 ```
 
+CI also runs the test suite on a Raspberry Pi OS (64-bit) userland: Debian
+trixie arm64 plus Raspberry Pi's apt repository
+(`.github/scripts/raspberry-pi-os-setup.sh`), as the unprivileged `pi` user.
+It catches arm64 wheel and Pi OS package problems, but not the Pi 5 kernel
+(16 KB pages) or its hardware.
+
 ## Project Structure
 
 ```
