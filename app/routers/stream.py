@@ -34,9 +34,10 @@ from app.security_settings import SecuritySettings, get_security_settings
 from app.services.authorization import AuthorizationService
 from app.services.detection.base import Detection
 from app.services.detection.draw import color_for_class, draw_detections
-from app.services.encoder import encode_jpeg
+from app.services.encoder import JPEG_QUALITY, WAN_JPEG_QUALITY, encode_jpeg
 from app.services.live.feed import LiveFeed
 from app.services.live.fmp4 import InitSegment
+from app.services.network import NetworkZone, classify_network
 from app.services.shared_encoder import SharedJpegEncoder
 from app.services.stream_tokens import InvalidStreamTokenError, StreamTokenService
 
@@ -48,22 +49,30 @@ logger = logging.getLogger(__name__)
 _DETECTION_POLL_SECONDS = 0.25
 # After a failed write, how long to wait for the disconnect it may stem from.
 _DISCONNECT_GRACE_SECONDS = 1.0
+# MJPEG frame rate cap for viewers outside the LAN: every JPEG is a whole
+# image, so frames beyond this cost uplink bandwidth for little smoothness.
+_WAN_MJPEG_MAX_FPS = 10
 
-# One encoder per camera buffer, dropped automatically with the buffer when
-# the camera is removed or re-created by the setup router.
-_encoders: weakref.WeakKeyDictionary[FrameBuffer, SharedJpegEncoder] = (
+# One encoder per camera buffer and JPEG quality, dropped automatically with
+# the buffer when the camera is removed or re-created by the setup router.
+_encoders: weakref.WeakKeyDictionary[FrameBuffer, dict[int, SharedJpegEncoder]] = (
     weakref.WeakKeyDictionary()
 )
 
 
-def _encoder_for(buf: FrameBuffer) -> SharedJpegEncoder:
-    encoder = _encoders.get(buf)
+def _encoder_for(buf: FrameBuffer, quality: int) -> SharedJpegEncoder:
+    by_quality = _encoders.get(buf)
+    if by_quality is None:
+        by_quality = _encoders[buf] = {}
+    encoder = by_quality.get(quality)
     if encoder is None:
-        encoder = _encoders[buf] = SharedJpegEncoder()
+        encoder = by_quality[quality] = SharedJpegEncoder()
     return encoder
 
 
-def _draw_and_encode(image: np.ndarray, detections: list[Detection]) -> bytes:
+def _draw_and_encode(
+    image: np.ndarray, detections: list[Detection], quality: int = JPEG_QUALITY
+) -> bytes:
     """Draw detection boxes (if any) and JPEG-encode, off the event loop.
 
     Drawing and encoding are combined into one function so the two
@@ -78,10 +87,10 @@ def _draw_and_encode(image: np.ndarray, detections: list[Detection]) -> bytes:
     """
     if detections:
         image = draw_detections(image, detections)
-    return encode_jpeg(image)
+    return encode_jpeg(image, quality=quality)
 
 
-def _render_frame(camera_name: str, frame: Frame) -> bytes:
+def _render_frame(camera_name: str, quality: int, frame: Frame) -> bytes:
     """Overlay the camera's current, unexpired detections and encode.
 
     Runs once per frame in the shared encoder's executor thread, so the
@@ -93,7 +102,7 @@ def _render_frame(camera_name: str, frame: Frame) -> bytes:
         if snapshot is not None and not snapshot.is_expired(time.monotonic())
         else []
     )
-    return _draw_and_encode(frame.image, detections)
+    return _draw_and_encode(frame.image, detections, quality)
 
 
 @router.post("/api/stream/{camera_name}/token", response_model=StreamTokenResponse)
@@ -134,6 +143,7 @@ async def stream(
     stream_token_service: StreamTokenService = Depends(get_stream_token_service),
     format: Literal["mjpeg", "fmp4"] = "mjpeg",
     audio: bool = False,
+    settings: SecuritySettings = Depends(get_security_settings),
 ) -> None:
     """Stream the camera to the browser over WebSocket.
 
@@ -141,7 +151,8 @@ async def stream(
     (see _stream_fmp4), with the camera's audio too if audio=true and the
     token was issued for audio. The default, format=mjpeg, waits on the FrameBuffer
     registered for camera_name and sends each new frame as binary JPEG;
-    frames this viewer was too slow for are skipped.
+    frames this viewer was too slow for are skipped. Outside the LAN, JPEGs
+    are encoded at a lower quality and capped at _WAN_MJPEG_MAX_FPS.
     Every frame is encoded once per camera and shared by all its viewers
     (SharedJpegEncoder), with the camera's detection boxes drawn on top
     when there is an unexpired snapshot — that snapshot may lag slightly
@@ -185,7 +196,10 @@ async def stream(
         if feed is not None and format == "fmp4":
             sender = _stream_fmp4(websocket, camera_name, feed, audio)
         else:
-            sender = _stream_mjpeg(websocket, camera_name, buf)
+            wan = (
+                classify_network(websocket, settings.trusted_proxies) is NetworkZone.WAN
+            )
+            sender = _stream_mjpeg(websocket, camera_name, buf, wan)
         await _run_until_disconnect(websocket, sender)
     except WebSocketDisconnect as exc:
         logger.info(
@@ -237,16 +251,22 @@ async def _wait_for_disconnect(websocket: WebSocket) -> int:
 
 
 async def _stream_mjpeg(
-    websocket: WebSocket, camera_name: str, buf: FrameBuffer
+    websocket: WebSocket, camera_name: str, buf: FrameBuffer, wan: bool = False
 ) -> None:
-    encoder = _encoder_for(buf)
-    render = functools.partial(_render_frame, camera_name)
+    quality = WAN_JPEG_QUALITY if wan else JPEG_QUALITY
+    min_interval = 1 / _WAN_MJPEG_MAX_FPS if wan else 0.0
+    encoder = _encoder_for(buf, quality)
+    render = functools.partial(_render_frame, camera_name, quality)
     last_frame: Frame | None = None
     while True:
         frame = await buf.next_frame(last_frame)
+        started_at = time.monotonic()
         jpeg = await encoder.encode(frame, render)
         await websocket.send_bytes(jpeg)
         last_frame = frame
+        if min_interval:
+            # Frames arriving meanwhile are skipped: next_frame returns the latest.
+            await asyncio.sleep(max(0.0, started_at + min_interval - time.monotonic()))
 
 
 async def _stream_fmp4(

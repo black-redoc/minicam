@@ -109,7 +109,7 @@ This is the MJPEG path of `VideoStream` in `app/static/js/stream.js`, which also
 | Parameter | Value |
 |-----------|-------|
 | Poll rate | 60 Hz |
-| Frame format | fMP4 (camera's own H.264/HEVC) or JPEG (quality set in encoder) |
+| Frame format | fMP4 (camera's own H.264/HEVC) or JPEG (quality 85 on LAN; 70 and at most 10 FPS off-LAN) |
 | Latency | ~1–2 frames (latest-frame buffer + WebSocket queue) |
 | Protocol | Binary WebSocket over HTTP/1.1 upgrade |
 | Stream token TTL | 30s by default (`MINICAM_STREAM_TOKEN_TTL_SECONDS`) |
@@ -117,5 +117,7 @@ This is the MJPEG path of `VideoStream` in `app/static/js/stream.js`, which also
 ## Multiple Viewers
 
 Multiple browser tabs can connect to the same `WS /ws/stream/{camera_name}` simultaneously, each with its own stream token. RTSP demuxing/decoding and JPEG encoding are both shared: each frame is decoded once and encoded once per camera (`SharedJpegEncoder`, `app/services/shared_encoder.py`), with detection boxes drawn in that same single pass, and the resulting bytes are sent to every viewer. Extra viewers only add the cost of sending the bytes.
+
+MJPEG viewers outside the LAN (for example through the Cloudflare Tunnel) get lighter JPEGs, at a lower quality and capped at 10 FPS, to spare the home uplink; frames that arrive in between are skipped. LAN and off-LAN viewers each share their own single encode per frame.
 
 The dashboard closes a camera's WebSocket while its browser tab is hidden and reopens it when the tab becomes visible again, so background tabs use no server CPU or bandwidth.
