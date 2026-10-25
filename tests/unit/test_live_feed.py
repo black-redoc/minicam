@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
 
 from app.services.live import feed as feed_module
 from app.services.live.feed import LiveFeed, LiveMessage, LiveSubscription
-from app.services.live.fmp4 import Fragment
-from tests.fixtures.live import AUDIO_INIT
+from app.services.live.fmp4 import Fmp4Segmenter, Fragment
+from app.services.recording.packets import EncodedPacket
+from tests.fixtures.live import AUDIO_INIT, FakeSegmenter
 from tests.fixtures.live import INIT as _INIT
 from tests.fixtures.live import open_feed as _open_feed
 from tests.fixtures.live import packet as _packet
@@ -255,3 +258,74 @@ def test_camera_without_audio_has_no_audio_mime() -> None:
     feed.on_packet(_packet(2, kind="audio"))
     assert feed.mime == _INIT.mime
     assert feed.audio_mime is None
+
+
+def _packet_at(n: int, at: float, keyframe: bool = False) -> EncodedPacket:
+    return dataclasses.replace(_packet(n, keyframe), received_at=at)
+
+
+def test_rendition_without_viewers_stops_once_idle_but_keeps_its_mime() -> None:
+    feed = LiveFeed()
+    segmenter = _open_feed(feed)
+    feed.on_packet(_packet_at(1, 0.0, keyframe=True))
+    feed.on_packet(_packet_at(2, feed_module._IDLE_STOP_SECONDS - 1))
+    assert not segmenter.closed
+
+    feed.on_packet(_packet_at(3, feed_module._IDLE_STOP_SECONDS))
+    assert segmenter.closed
+    assert feed.mime == _INIT.mime
+
+
+async def test_viewer_restarts_a_stopped_rendition_at_the_next_keyframe() -> None:
+    feed = LiveFeed()
+    segmenters = [FakeSegmenter(), FakeSegmenter()]
+    opener = MagicMock(side_effect=segmenters)
+    feed.on_stream_opened(opener)
+    feed.on_packet(_packet_at(1, 0.0, keyframe=True))
+    feed.on_packet(_packet_at(2, feed_module._IDLE_STOP_SECONDS))
+    assert segmenters[0].closed
+
+    with feed.subscribe() as subscription:
+        assert _drain(subscription) == []  # nothing buffered while stopped
+        feed.on_packet(_packet_at(3, 20.0))
+        feed.on_packet(_packet_at(4, 21.0, keyframe=True))
+        await _settle()
+        assert _drain(subscription) == [_INIT, Fragment(b"\x04", True)]
+    assert opener.call_count == 2
+
+
+async def test_rendition_stops_once_its_last_viewer_has_been_gone_a_while() -> None:
+    feed = LiveFeed()
+    segmenter = _open_feed(feed)
+    with feed.subscribe():
+        feed.on_packet(_packet_at(1, 0.0, keyframe=True))
+        feed.on_packet(_packet_at(2, 100.0))
+    feed.on_packet(_packet_at(3, 101.0))
+    assert not segmenter.closed  # the viewer may be reconnecting
+    feed.on_packet(_packet_at(4, 101.0 + feed_module._IDLE_STOP_SECONDS))
+    assert segmenter.closed
+
+
+async def test_audio_rendition_stops_while_video_only_keeps_its_viewer() -> None:
+    feed = LiveFeed()
+    audio_segmenter = FakeSegmenter(AUDIO_INIT)
+    feed.on_stream_opened(
+        lambda: cast(Fmp4Segmenter, video_segmenter),
+        lambda: cast(Fmp4Segmenter, audio_segmenter),
+    )
+    video_segmenter = FakeSegmenter()
+    with feed.subscribe():
+        feed.on_packet(_packet_at(1, 0.0, keyframe=True))
+        feed.on_packet(_packet_at(2, feed_module._IDLE_STOP_SECONDS))
+    assert audio_segmenter.closed
+    assert not video_segmenter.closed
+    assert feed.audio_mime == AUDIO_INIT.mime
+
+
+def test_stream_close_forgets_the_mime_of_a_stopped_rendition() -> None:
+    feed = LiveFeed()
+    _open_feed(feed)
+    feed.on_packet(_packet_at(1, 0.0, keyframe=True))
+    feed.on_packet(_packet_at(2, feed_module._IDLE_STOP_SECONDS))
+    feed.on_stream_closed()
+    assert feed.mime is None
