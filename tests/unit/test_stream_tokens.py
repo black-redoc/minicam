@@ -8,7 +8,11 @@ import jwt
 import pytest
 
 from app.services.auth import TokenService
-from app.services.stream_tokens import InvalidStreamTokenError, StreamTokenService
+from app.services.stream_tokens import (
+    InvalidStreamTokenError,
+    StreamTokenService,
+    UsedStreamTokens,
+)
 
 
 class TestStreamTokenIssueAndVerify:
@@ -30,6 +34,7 @@ class TestStreamTokenIssueAndVerify:
                 "typ": "stream",
                 "sid": 123,
                 "exp": int(time.time()) + 30,
+                "jti": "jti-1",
             },
             "test-secret",
             algorithm="HS256",
@@ -96,8 +101,83 @@ class TestStreamTokenAudioClaim:
                 "typ": "stream",
                 "audio": "yes",
                 "exp": int(time.time()) + 30,
+                "jti": "jti-1",
             },
             "test-secret",
             algorithm="HS256",
         )
         assert service.verify(token, camera_name="cam1").audio is False
+
+
+def _signed(claims: dict[str, object]) -> str:
+    base: dict[str, object] = {
+        "sub": "7",
+        "camera": "cam1",
+        "typ": "stream",
+        "exp": int(time.time()) + 30,
+    }
+    return jwt.encode({**base, **claims}, "test-secret", algorithm="HS256")
+
+
+class TestStreamTokenSingleUse:
+    def test_a_token_verifies_only_once(self) -> None:
+        service = StreamTokenService(secret="test-secret")
+        token = service.issue(user_id=7, camera_name="cam1", ttl_seconds=30)
+        service.verify(token, camera_name="cam1")
+        with pytest.raises(InvalidStreamTokenError):
+            service.verify(token, camera_name="cam1")
+
+    def test_used_tokens_are_shared_between_service_instances(self) -> None:
+        used = UsedStreamTokens()
+        issuer = StreamTokenService(secret="test-secret", used_tokens=used)
+        token = issuer.issue(user_id=7, camera_name="cam1", ttl_seconds=30)
+        issuer.verify(token, camera_name="cam1")
+        other = StreamTokenService(secret="test-secret", used_tokens=used)
+        with pytest.raises(InvalidStreamTokenError):
+            other.verify(token, camera_name="cam1")
+
+    def test_each_issued_token_is_distinct(self) -> None:
+        service = StreamTokenService(secret="test-secret")
+        first = service.issue(user_id=7, camera_name="cam1", ttl_seconds=30)
+        second = service.issue(user_id=7, camera_name="cam1", ttl_seconds=30)
+        service.verify(first, camera_name="cam1")
+        assert service.verify(second, camera_name="cam1").user_id == 7
+
+    def test_a_rejected_token_is_not_consumed(self) -> None:
+        service = StreamTokenService(secret="test-secret")
+        token = service.issue(user_id=7, camera_name="cam1", ttl_seconds=30)
+        with pytest.raises(InvalidStreamTokenError):
+            service.verify(token, camera_name="cam2")
+        assert service.verify(token, camera_name="cam1").camera_name == "cam1"
+
+    @pytest.mark.parametrize("claims", [{}, {"jti": ""}, {"jti": 123}])
+    def test_token_without_a_valid_jti_is_rejected(
+        self, claims: dict[str, object]
+    ) -> None:
+        service = StreamTokenService(secret="test-secret")
+        with pytest.raises(InvalidStreamTokenError):
+            service.verify(_signed(claims), camera_name="cam1")
+
+    def test_token_without_exp_is_rejected(self) -> None:
+        token = jwt.encode(
+            {"sub": "7", "camera": "cam1", "typ": "stream", "jti": "jti-1"},
+            "test-secret",
+            algorithm="HS256",
+        )
+        with pytest.raises(InvalidStreamTokenError):
+            StreamTokenService(secret="test-secret").verify(token, "cam1")
+
+
+class TestUsedStreamTokens:
+    def test_second_claim_of_the_same_jti_fails(self) -> None:
+        used = UsedStreamTokens(clock=lambda: 100.0)
+        assert used.claim("a", expires_at=130.0) is True
+        assert used.claim("a", expires_at=130.0) is False
+
+    def test_expired_entries_are_forgotten(self) -> None:
+        now = [100.0]
+        used = UsedStreamTokens(clock=lambda: now[0])
+        used.claim("a", expires_at=130.0)
+        now[0] = 130.0
+        used.claim("b", expires_at=160.0)
+        assert used._expiries == {"b": 160.0}
