@@ -13,9 +13,15 @@ class TestDecodeVideoFrame:
         frame = decode_video_frame(av_frame, sequence=0)
         assert frame.height == 720
 
-    def test_reformats_to_rgb24(self) -> None:
+    def test_does_not_convert_until_image_is_read(self) -> None:
         av_frame = make_mock_av_frame()
         decode_video_frame(av_frame, sequence=0)
+        av_frame.reformat.assert_not_called()
+
+    def test_reformats_to_rgb24_once_on_image_access(self) -> None:
+        av_frame = make_mock_av_frame()
+        frame = decode_video_frame(av_frame, sequence=0)
+        assert frame.image is frame.image
         av_frame.reformat.assert_called_once_with(format="rgb24")
 
     def test_sequence_is_propagated(self) -> None:

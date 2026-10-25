@@ -1,3 +1,6 @@
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -69,3 +72,70 @@ class TestFrameImmutability:
         frame = _make_frame()
         with pytest.raises(AttributeError):
             frame.image = np.ones((480, 640, 3), dtype=np.uint8)  # type: ignore[misc]
+
+
+class TestLazyFrame:
+    def test_convert_is_not_called_on_creation(self) -> None:
+        calls: list[int] = []
+        Frame.lazy(
+            lambda: calls.append(1) or np.zeros((2, 2, 3), np.uint8),
+            width=2,
+            height=2,
+            timestamp=0.0,
+            sequence=0,
+        )
+        assert calls == []
+
+    def test_image_is_converted_once(self) -> None:
+        calls: list[int] = []
+
+        def convert() -> np.ndarray:
+            calls.append(1)
+            return np.zeros((2, 2, 3), dtype=np.uint8)
+
+        frame = Frame.lazy(convert, width=2, height=2, timestamp=0.0, sequence=0)
+        assert frame.image is frame.image
+        assert calls == [1]
+
+    def test_lazy_image_is_read_only(self) -> None:
+        frame = Frame.lazy(
+            lambda: np.zeros((2, 2, 3), dtype=np.uint8),
+            width=2,
+            height=2,
+            timestamp=0.0,
+            sequence=0,
+        )
+        with pytest.raises(ValueError, match="read-only"):
+            frame.image[0, 0, 0] = 255
+
+    def test_concurrent_readers_convert_once(self) -> None:
+        calls: list[int] = []
+
+        def convert() -> np.ndarray:
+            calls.append(1)
+            time.sleep(0.01)  # widen the race window
+            return np.zeros((2, 2, 3), dtype=np.uint8)
+
+        frame = Frame.lazy(convert, width=2, height=2, timestamp=0.0, sequence=0)
+        images: list[np.ndarray] = []
+        threads = [
+            threading.Thread(target=lambda: images.append(frame.image))
+            for _ in range(8)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert calls == [1]
+        assert all(image is images[0] for image in images)
+
+    def test_convert_is_released_after_first_access(self) -> None:
+        frame = Frame.lazy(
+            lambda: np.zeros((2, 2, 3), dtype=np.uint8),
+            width=2,
+            height=2,
+            timestamp=0.0,
+            sequence=0,
+        )
+        _ = frame.image
+        assert frame._convert is None
