@@ -421,8 +421,16 @@ class TestServiceFactories:
 
     def test_get_stream_token_service_uses_settings_secret(self) -> None:
         settings = MagicMock(jwt_secret="s3cr3t", jwt_algorithm="HS256")
-        service = dependencies.get_stream_token_service(settings)
+        used = dependencies.get_used_stream_tokens()
+        service = dependencies.get_stream_token_service(settings, used)
         assert service._secret == "s3cr3t"
+        assert service._used_tokens is used
+
+    def test_used_stream_tokens_is_a_singleton(self) -> None:
+        assert (
+            dependencies.get_used_stream_tokens()
+            is dependencies.get_used_stream_tokens()
+        )
 
     def test_get_authorization_service_wraps_repository(self) -> None:
         repo = MagicMock()

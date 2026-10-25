@@ -44,7 +44,7 @@ from app.services.cloudflare_access import (
 from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.network import NetworkZone, classify_network
 from app.services.stream_access import StreamAccessService
-from app.services.stream_tokens import StreamTokenService
+from app.services.stream_tokens import StreamTokenService, UsedStreamTokens
 from app.services.wan_access import WanAccessGateService
 
 SESSION_COOKIE_NAME = "minicam_session"
@@ -102,11 +102,24 @@ def get_token_service(
     return TokenService(secret=settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+@lru_cache
+def get_used_stream_tokens() -> UsedStreamTokens:
+    """Build the singleton set of used stream tokens.
+
+    Must be a single shared instance (lru_cache, like get_login_rate_limiter)
+    so a token used in one request is still rejected in the next.
+    """
+    return UsedStreamTokens()
+
+
 def get_stream_token_service(
     settings: SecuritySettings = Depends(get_security_settings),
+    used_tokens: UsedStreamTokens = Depends(get_used_stream_tokens),
 ) -> StreamTokenService:
     return StreamTokenService(
-        secret=settings.jwt_secret, algorithm=settings.jwt_algorithm
+        secret=settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+        used_tokens=used_tokens,
     )
 
 
