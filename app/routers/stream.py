@@ -24,6 +24,9 @@ from app.buffers.frame_buffer import FrameBuffer
 from app.dependencies import (
     enforce_wan_access_gate,
     get_authorization_service,
+    get_network_zone,
+    get_session_jti,
+    get_stream_access_service,
     get_stream_token_service,
     require_can_view,
 )
@@ -37,9 +40,14 @@ from app.services.detection.draw import color_for_class, draw_detections
 from app.services.encoder import JPEG_QUALITY, WAN_JPEG_QUALITY, encode_jpeg
 from app.services.live.feed import LiveFeed
 from app.services.live.fmp4 import InitSegment
-from app.services.network import NetworkZone, classify_network
+from app.services.network import NetworkZone
 from app.services.shared_encoder import SharedJpegEncoder
-from app.services.stream_tokens import InvalidStreamTokenError, StreamTokenService
+from app.services.stream_access import StreamAccessService
+from app.services.stream_tokens import (
+    InvalidStreamTokenError,
+    StreamTokenPayload,
+    StreamTokenService,
+)
 
 router = APIRouter(tags=["stream"])
 logger = logging.getLogger(__name__)
@@ -49,6 +57,8 @@ logger = logging.getLogger(__name__)
 _DETECTION_POLL_SECONDS = 0.25
 # After a failed write, how long to wait for the disconnect it may stem from.
 _DISCONNECT_GRACE_SECONDS = 1.0
+# How often an open stream re-checks its viewer's session and permissions.
+_ACCESS_RECHECK_SECONDS = 10.0
 # MJPEG frame rate cap for viewers outside the LAN: every JPEG is a whole
 # image, so frames beyond this cost uplink bandwidth for little smoothness.
 _WAN_MJPEG_MAX_FPS = 10
@@ -111,6 +121,7 @@ async def issue_stream_token(
     audio: bool = False,
     user: User = Depends(require_can_view),
     _wan_gate: None = Depends(enforce_wan_access_gate),
+    session_jti: str = Depends(get_session_jti),
     stream_token_service: StreamTokenService = Depends(get_stream_token_service),
     authorization_service: AuthorizationService = Depends(get_authorization_service),
     settings: SecuritySettings = Depends(get_security_settings),
@@ -124,7 +135,11 @@ async def issue_stream_token(
     if audio and not can_listen:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not allowed to listen")
     token = stream_token_service.issue(
-        user.id, camera_name, settings.stream_token_ttl_seconds, audio=audio
+        user.id,
+        camera_name,
+        settings.stream_token_ttl_seconds,
+        audio=audio,
+        session_jti=session_jti,
     )
     feed = state.live_feeds.get(camera_name)
     return StreamTokenResponse(
@@ -143,7 +158,8 @@ async def stream(
     stream_token_service: StreamTokenService = Depends(get_stream_token_service),
     format: Literal["mjpeg", "fmp4"] = "mjpeg",
     audio: bool = False,
-    settings: SecuritySettings = Depends(get_security_settings),
+    network_zone: NetworkZone = Depends(get_network_zone),
+    access: StreamAccessService = Depends(get_stream_access_service),
 ) -> None:
     """Stream the camera to the browser over WebSocket.
 
@@ -159,7 +175,9 @@ async def stream(
     behind the frame, since the detection worker runs at a lower cadence
     than capture/encode; this is an accepted approximation. Closes with code
     1008 if the stream token is missing/invalid/expired/for a different
-    camera, or if camera_name is not registered.
+    camera, or if camera_name is not registered. Also closes with 1008,
+    at the handshake or later while streaming (every _ACCESS_RECHECK_SECONDS),
+    once the viewer's session, user or permissions no longer allow it.
     """
     try:
         payload = stream_token_service.verify(token, camera_name)
@@ -184,6 +202,12 @@ async def stream(
         await websocket.close(code=1008)
         return
 
+    wan = network_zone is NetworkZone.WAN
+    if not await access.is_granted(payload, wan):
+        logger.warning("Stream rejected — access not granted: camera=%s", camera_name)
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     logger.info(
         "Stream client connected: camera=%s client=%s format=%s audio=%s",
@@ -196,11 +220,10 @@ async def stream(
         if feed is not None and format == "fmp4":
             sender = _stream_fmp4(websocket, camera_name, feed, audio)
         else:
-            wan = (
-                classify_network(websocket, settings.trusted_proxies) is NetworkZone.WAN
-            )
             sender = _stream_mjpeg(websocket, camera_name, buf, wan)
-        await _run_until_disconnect(websocket, sender)
+        await _run_until_disconnect(
+            websocket, _while_access_granted(websocket, sender, access, payload, wan)
+        )
     except WebSocketDisconnect as exc:
         logger.info(
             "Stream client disconnected: camera=%s code=%s", camera_name, exc.code
@@ -240,6 +263,38 @@ async def _run_until_disconnect(
             send_task.exception()  # retrieved: the client leaving explains it
         raise WebSocketDisconnect(code=disconnect_task.result())
     send_task.result()
+
+
+async def _while_access_granted(
+    websocket: WebSocket,
+    sender: Coroutine[Any, Any, None],
+    access: StreamAccessService,
+    payload: StreamTokenPayload,
+    wan: bool,
+) -> None:
+    """Run sender, closing the socket (1008) once access is no longer granted.
+
+    Checked every _ACCESS_RECHECK_SECONDS, so logging out or losing a
+    permission ends a stream that is already playing.
+    """
+    send_task = asyncio.create_task(sender)
+    try:
+        while True:
+            done, _ = await asyncio.wait({send_task}, timeout=_ACCESS_RECHECK_SECONDS)
+            if done:
+                send_task.result()
+                return
+            if not await access.is_granted(payload, wan):
+                break
+    finally:
+        send_task.cancel()
+        await asyncio.wait({send_task})
+    logger.warning(
+        "Stream closed — access revoked: camera=%s user=%s",
+        payload.camera_name,
+        payload.user_id,
+    )
+    await websocket.close(code=1008)
 
 
 async def _wait_for_disconnect(websocket: WebSocket) -> int:

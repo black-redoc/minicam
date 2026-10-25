@@ -9,6 +9,7 @@ from functools import lru_cache
 import aiosqlite
 import jwt
 from fastapi import Cookie, Depends, HTTPException, Request, status
+from starlette.requests import HTTPConnection
 
 from app.db.connection import get_connection
 from app.models.domain import User
@@ -42,6 +43,7 @@ from app.services.cloudflare_access import (
 )
 from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.network import NetworkZone, classify_network
+from app.services.stream_access import StreamAccessService
 from app.services.stream_tokens import StreamTokenService
 from app.services.wan_access import WanAccessGateService
 
@@ -120,6 +122,17 @@ def get_wan_access_gate_service(
     return WanAccessGateService(wan_access_repository)
 
 
+def get_stream_access_service(
+    session_repository: SessionRepository = Depends(get_session_repository),
+    user_repository: UserRepository = Depends(get_user_repository),
+    authorization_service: AuthorizationService = Depends(get_authorization_service),
+    wan_access_gate: WanAccessGateService = Depends(get_wan_access_gate_service),
+) -> StreamAccessService:
+    return StreamAccessService(
+        session_repository, user_repository, authorization_service, wan_access_gate
+    )
+
+
 @lru_cache
 def get_login_rate_limiter() -> LoginRateLimiter:
     """Build the singleton login rate limiter.
@@ -131,7 +144,7 @@ def get_login_rate_limiter() -> LoginRateLimiter:
     return LoginRateLimiter()
 
 
-def get_network_zone(request: Request) -> NetworkZone:
+def get_network_zone(request: HTTPConnection) -> NetworkZone:
     settings = get_security_settings()
     return classify_network(request, trusted_proxies=settings.trusted_proxies)
 
@@ -179,6 +192,20 @@ async def get_current_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or inactive")
 
     return user
+
+
+def get_session_jti(
+    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    token_service: TokenService = Depends(get_token_service),
+) -> str:
+    """The current session's jti. Resolve after get_current_user, which has
+    already checked the session is valid and not revoked."""
+    if session_token is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
+    try:
+        return token_service.verify(session_token).jti
+    except InvalidSessionTokenError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid session") from exc
 
 
 async def get_optional_current_user(

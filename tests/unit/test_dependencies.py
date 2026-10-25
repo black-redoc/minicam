@@ -148,6 +148,25 @@ class TestGetCurrentUser:
         assert user is _USER
 
 
+class TestGetSessionJti:
+    def test_raises_401_when_no_cookie(self) -> None:
+        with pytest.raises(HTTPException) as exc_info:
+            dependencies.get_session_jti(None, MagicMock())
+        assert exc_info.value.status_code == 401
+
+    def test_raises_401_on_invalid_token(self) -> None:
+        token_service = MagicMock()
+        token_service.verify.side_effect = InvalidSessionTokenError("bad token")
+        with pytest.raises(HTTPException) as exc_info:
+            dependencies.get_session_jti("token", token_service)
+        assert exc_info.value.status_code == 401
+
+    def test_returns_the_session_jti(self) -> None:
+        token_service = MagicMock()
+        token_service.verify.return_value = SessionTokenPayload(user_id=1, jti="jti-1")
+        assert dependencies.get_session_jti("token", token_service) == "jti-1"
+
+
 class TestGetOptionalCurrentUser:
     async def test_returns_none_when_no_cookie(self) -> None:
         user = await dependencies.get_optional_current_user(
@@ -414,3 +433,16 @@ class TestServiceFactories:
         repo = MagicMock()
         service = dependencies.get_wan_access_gate_service(repo)
         assert service._wan_access_repository is repo
+
+    def test_get_stream_access_service_wraps_its_collaborators(self) -> None:
+        sessions, users, authz, gate = (
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+        )
+        service = dependencies.get_stream_access_service(sessions, users, authz, gate)
+        assert service._session_repository is sessions
+        assert service._user_repository is users
+        assert service._authorization_service is authz
+        assert service._wan_access_gate is gate

@@ -12,6 +12,31 @@ from app.services.stream_tokens import InvalidStreamTokenError, StreamTokenServi
 
 
 class TestStreamTokenIssueAndVerify:
+    def test_session_jti_round_trips(self) -> None:
+        service = StreamTokenService(secret="test-secret")
+        token = service.issue(7, "cam1", ttl_seconds=30, session_jti="sid-1")
+        assert service.verify(token, camera_name="cam1").session_jti == "sid-1"
+
+    def test_token_without_session_has_no_session_jti(self) -> None:
+        service = StreamTokenService(secret="test-secret")
+        token = service.issue(7, "cam1", ttl_seconds=30)
+        assert service.verify(token, camera_name="cam1").session_jti is None
+
+    def test_non_string_session_claim_is_ignored(self) -> None:
+        token = jwt.encode(
+            {
+                "sub": "7",
+                "camera": "cam1",
+                "typ": "stream",
+                "sid": 123,
+                "exp": int(time.time()) + 30,
+            },
+            "test-secret",
+            algorithm="HS256",
+        )
+        payload = StreamTokenService(secret="test-secret").verify(token, "cam1")
+        assert payload.session_jti is None
+
     def test_verify_returns_matching_payload(self) -> None:
         service = StreamTokenService(secret="test-secret")
         token = service.issue(user_id=7, camera_name="cam1", ttl_seconds=30)

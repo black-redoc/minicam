@@ -43,7 +43,8 @@ The `token` query parameter must be the value returned by step 1, issued for thi
 - Each handler waits on the camera's `FrameBuffer` and is woken as soon as a new frame arrives (no polling).
 - A frame is only sent once per viewer (no duplicate frames). A viewer slower than the camera skips the frames it missed and always gets the latest one.
 - The connection is closed immediately with WebSocket close code **1008** (Policy Violation) if: the token is missing, malformed, expired, was issued for a different camera, or the requested camera is not registered.
-- The connection stays open indefinitely as long as the camera is running. If the camera thread crashes, the WebSocket will stop delivering frames but the connection remains open.
+- The token is tied to the session it was issued from. While the stream is open, minicam re-checks every 10 seconds that this session is still valid (not logged out, revoked or expired), the user is still active, they still have `can_view` (and `can_listen` for audio) and, off-LAN, WAN access is still enabled. Once any of these stops being true, the connection is closed with **1008**.
+- Otherwise the connection stays open indefinitely as long as the camera is running. If the camera thread crashes, the WebSocket will stop delivering frames but the connection remains open.
 - Since the token is only checked at handshake time, a client whose token expires mid-stream is **not** disconnected — the socket keeps delivering frames.
 
 ## fMP4 format

@@ -9,7 +9,10 @@ User=<user>
 WorkingDirectory=/home/<user>/Development/minicam
 # Real .env, not the .env.example template committed to the repo.
 EnvironmentFile=/home/<user>/Development/minicam/.env
-ExecStart=/home/<user>/.local/bin/uv run fastapi run main.py --host 0.0.0.0 --port 8080
+# uvicorn directly, not `fastapi run` (same proxy-header defaults), because
+# only uvicorn can turn off per-message deflate: live video and JPEGs are
+# already compressed, so deflating them only costs the Pi CPU and latency.
+ExecStart=/home/<user>/.local/bin/uv run uvicorn main:app --host 0.0.0.0 --port 8080 --ws-per-message-deflate false
 Restart=on-failure
 RestartSec=5s
 

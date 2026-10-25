@@ -5,15 +5,20 @@ reused for a different camera or replaced by the session cookie alone.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import aiosqlite
+import numpy as np
+import pytest
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 import app.state as state_module
 from app.buffers.frame_buffer import FrameBuffer
+from app.models.frame import Frame
 from app.repositories.permission_repository import SQLitePermissionRepository
 from app.repositories.user_repository import SQLiteUserRepository
+from app.routers import stream as stream_router
 from app.services.auth import PasswordHasher
 
 
@@ -115,5 +120,65 @@ async def test_session_cookie_alone_cannot_open_the_websocket(
                 ws.receive_bytes()
         except Exception:
             pass  # Expected: rejected — no token query param at all
+    finally:
+        state_module.frame_buffers.clear()
+
+
+def _frame_buffer() -> FrameBuffer:
+    buf = FrameBuffer()
+    buf.write(
+        Frame(
+            image=np.zeros((4, 4, 3), dtype=np.uint8),
+            width=4,
+            height=4,
+            timestamp=0.0,
+            sequence=0,
+        )
+    )
+    return buf
+
+
+async def test_logging_out_closes_an_open_stream(
+    client: TestClient, db_connection: aiosqlite.Connection
+) -> None:
+    state_module.frame_buffers["cam1"] = _frame_buffer()
+    try:
+        await _login_viewer(client, db_connection, "leaver@example.com")
+        token = client.post("/api/stream/cam1/token").json()["token"]
+        with (
+            patch.object(stream_router, "_ACCESS_RECHECK_SECONDS", 0.02),
+            client.websocket_connect(f"/ws/stream/cam1?token={token}") as ws,
+        ):
+            ws.receive_bytes()
+            assert client.post("/api/auth/logout").status_code < 300
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_bytes()
+        assert exc_info.value.code == 1008
+    finally:
+        state_module.frame_buffers.clear()
+
+
+async def test_revoking_can_view_closes_an_open_stream(
+    client: TestClient, db_connection: aiosqlite.Connection
+) -> None:
+    state_module.frame_buffers["cam1"] = _frame_buffer()
+    try:
+        await _login_viewer(client, db_connection, "revoked@example.com")
+        token = client.post("/api/stream/cam1/token").json()["token"]
+        user = await SQLiteUserRepository(db_connection).get_by_email(
+            "revoked@example.com"
+        )
+        assert user is not None
+        with (
+            patch.object(stream_router, "_ACCESS_RECHECK_SECONDS", 0.02),
+            client.websocket_connect(f"/ws/stream/cam1?token={token}") as ws,
+        ):
+            ws.receive_bytes()
+            await SQLitePermissionRepository(db_connection).upsert(
+                user.id, "cam1", can_view=False, can_use_ptz=False
+            )
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_bytes()
+        assert exc_info.value.code == 1008
     finally:
         state_module.frame_buffers.clear()

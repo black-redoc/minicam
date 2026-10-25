@@ -3,9 +3,10 @@
 Distinct from the session JWT (TokenService) on purpose: a stream token is
 bound to one camera via the `camera` claim (and, with the `audio` claim,
 lets the socket carry that camera's audio), carries a short TTL (~30s, see
-security_settings.stream_token_ttl_seconds), and is never checked against the
-sessions table — once the handshake succeeds the socket stays open even if
-the token has since expired, the same trust model as a signed S3 URL.
+security_settings.stream_token_ttl_seconds), and names the session it was
+issued for (`sid`). Once the handshake succeeds the socket stays open even if
+the token has since expired; the stream router re-checks that session and the
+viewer's permissions while it plays (see app/services/stream_access.py).
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ class StreamTokenPayload:
     user_id: int
     camera_name: str
     audio: bool = False
+    session_jti: str | None = None
 
 
 class StreamTokenService:
@@ -38,9 +40,15 @@ class StreamTokenService:
         self._algorithm = algorithm
 
     def issue(
-        self, user_id: int, camera_name: str, ttl_seconds: int, audio: bool = False
+        self,
+        user_id: int,
+        camera_name: str,
+        ttl_seconds: int,
+        audio: bool = False,
+        session_jti: str | None = None,
     ) -> str:
-        """audio=True authorizes the camera's audio: only for can_listen."""
+        """audio=True authorizes the camera's audio: only for can_listen.
+        session_jti is the session the stream lives and dies with."""
         now = int(time.time())
         payload: dict[str, object] = {
             "sub": str(user_id),
@@ -51,6 +59,8 @@ class StreamTokenService:
         }
         if audio:
             payload["audio"] = True
+        if session_jti is not None:
+            payload["sid"] = session_jti
         return jwt.encode(payload, self._secret, algorithm=self._algorithm)
 
     def verify(self, token: str, camera_name: str) -> StreamTokenPayload:
@@ -69,4 +79,5 @@ class StreamTokenService:
             user_id=int(payload["sub"]),
             camera_name=payload["camera"],
             audio=payload.get("audio") is True,
+            session_jti=sid if isinstance(sid := payload.get("sid"), str) else None,
         )
