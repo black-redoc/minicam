@@ -172,4 +172,3 @@ async def test_sync_loop_syncs_at_once_then_waits() -> None:
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
     assert service.sync_once.await_count == 1
-
