@@ -13,6 +13,10 @@ from starlette.requests import HTTPConnection
 
 from app.db.connection import get_connection
 from app.models.domain import User
+from app.repositories.entitlement_sync_repository import (
+    EntitlementSyncRepository,
+    SQLiteEntitlementSyncRepository,
+)
 from app.repositories.permission_repository import (
     PermissionRepository,
     SQLitePermissionRepository,
@@ -80,6 +84,12 @@ def get_wan_access_repository(
     return SQLiteWanAccessRepository(conn)
 
 
+def get_entitlement_sync_repository(
+    conn: aiosqlite.Connection = Depends(get_db_connection),
+) -> EntitlementSyncRepository:
+    return SQLiteEntitlementSyncRepository(conn)
+
+
 def get_push_subscription_repository(
     conn: aiosqlite.Connection = Depends(get_db_connection),
 ) -> PushSubscriptionRepository:
@@ -131,8 +141,16 @@ def get_authorization_service(
 
 def get_wan_access_gate_service(
     wan_access_repository: WanAccessRepository = Depends(get_wan_access_repository),
+    entitlement_sync_repository: EntitlementSyncRepository = Depends(
+        get_entitlement_sync_repository
+    ),
+    settings: SecuritySettings = Depends(get_security_settings),
 ) -> WanAccessGateService:
-    return WanAccessGateService(wan_access_repository)
+    """In central mode the gate also fails closed on a stale sync."""
+    return WanAccessGateService(
+        wan_access_repository,
+        entitlement_sync_repository if settings.central_mode else None,
+    )
 
 
 def get_stream_access_service(

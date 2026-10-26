@@ -3,6 +3,7 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
@@ -10,6 +11,9 @@ from app import state
 from app.buffers.frame_buffer import FrameBuffer
 from app.db.connection import close_db, init_db
 from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.repositories.entitlement_sync_repository import (
+    SQLiteEntitlementSyncRepository,
+)
 from app.routers import auth as auth_router
 from app.routers import dashboard
 from app.routers import docs as docs_router
@@ -24,6 +28,11 @@ from app.security_settings import get_security_settings
 from app.services.camera import RTSPCamera
 from app.services.detection.factory import get_detection_backend
 from app.services.detection.worker import DetectionWorker
+from app.services.entitlements import (
+    EntitlementClient,
+    EntitlementSyncService,
+    run_sync_loop,
+)
 from app.services.live.feed import LiveFeed
 from app.services.notifications import runtime as notification_runtime
 from app.services.ptz import PTZConfig, PTZService
@@ -46,6 +55,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     conn = await init_db(security_settings.db_path)
     await notification_runtime.start_web_push(conn)
     await recording_runtime.service.start()
+
+    entitlement_http: httpx.AsyncClient | None = None
+    entitlement_task: asyncio.Task[None] | None = None
+    central_url = security_settings.central_url
+    device_token = security_settings.device_token
+    if central_url and device_token:
+        entitlement_http = httpx.AsyncClient()
+        sync_service = EntitlementSyncService(
+            EntitlementClient(entitlement_http, central_url, device_token),
+            SQLiteEntitlementSyncRepository(conn),
+        )
+        entitlement_task = asyncio.create_task(run_sync_loop(sync_service))
+        logger.info("Central mode: syncing WAN entitlements from the dashboard")
 
     for cam in config.cameras:
         buf = FrameBuffer()
@@ -94,6 +116,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     yield
 
+    if entitlement_task is not None:
+        entitlement_task.cancel()
+        await asyncio.gather(entitlement_task, return_exceptions=True)
+    if entitlement_http is not None:
+        await entitlement_http.aclose()
     for task in state.detection_workers.values():
         task.cancel()
     await asyncio.gather(*state.detection_workers.values(), return_exceptions=True)

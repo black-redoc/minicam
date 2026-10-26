@@ -5,6 +5,7 @@ requires-python = ">=3.14"
 dependencies = [
     "av==17.1.0",
     "fastapi[standard]==0.138.1",
+    "httpx==0.28.1",
     "numpy==2.5.0",
     "onnxruntime==1.27.0",
     "onvif-zeep==0.2.12",

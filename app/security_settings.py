@@ -11,6 +11,7 @@ import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 _DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24
 _DEFAULT_STREAM_TOKEN_TTL_SECONDS = 30
@@ -37,6 +38,14 @@ class SecuritySettings:
     trusted_proxies: frozenset[str] = field(default_factory=frozenset)
     cf_access_team_domain: str | None = None
     cf_access_aud: str | None = None
+    # Central mode (minicam-admin ADR 0007): WAN entitlements come from the
+    # dashboard. The token is a secret, so it is kept out of repr() and logs.
+    central_url: str | None = None
+    device_token: str | None = field(default=None, repr=False)
+
+    @property
+    def central_mode(self) -> bool:
+        return self.central_url is not None
 
 
 def _reject_placeholders() -> None:
@@ -47,6 +56,24 @@ def _reject_placeholders() -> None:
                 "the real value (see app/docs/configuration.md), or leave the "
                 "Cloudflare Access ones empty if you don't use the tunnel"
             )
+
+
+def _read_central(url_var: str, token_var: str) -> tuple[str | None, str | None]:
+    """Both set (HTTPS, or plain HTTP to localhost for development) or neither."""
+    url = os.environ.get(url_var, "").strip() or None
+    token = os.environ.get(token_var, "").strip() or None
+    if url is None and token is None:
+        return None, None
+    if url is None or token is None:
+        raise RuntimeError(
+            f"{url_var} and {token_var} must be set together to fetch WAN "
+            "entitlements from the dashboard, or both left empty"
+        )
+    parts = urlsplit(url)
+    local = parts.scheme == "http" and parts.hostname in {"localhost", "127.0.0.1"}
+    if not (parts.scheme == "https" or local) or not parts.hostname:
+        raise RuntimeError(f"{url_var} must be an https:// URL")
+    return url.rstrip("/"), token
 
 
 def _read_int(env_var: str, default: int) -> int:
@@ -65,8 +92,10 @@ def get_security_settings() -> SecuritySettings:
 
     Raises:
         RuntimeError: if MINICAM_JWT_SECRET is not set — there is no safe
-            default for a token-signing secret — or if any setting still has
-            its .env.example placeholder value.
+            default for a token-signing secret — if any setting still has
+            its .env.example placeholder value, or if only one of
+            MINICAM_CENTRAL_URL / MINICAM_DEVICE_TOKEN is set or the URL is
+            not HTTPS.
     """
     _reject_placeholders()
     secret = os.environ.get("MINICAM_JWT_SECRET")
@@ -74,6 +103,9 @@ def get_security_settings() -> SecuritySettings:
         raise RuntimeError(
             "MINICAM_JWT_SECRET is not set — required to sign session and stream tokens"
         )
+    central_url, device_token = _read_central(
+        "MINICAM_CENTRAL_URL", "MINICAM_DEVICE_TOKEN"
+    )
     return SecuritySettings(
         jwt_secret=secret,
         session_ttl_seconds=_read_int(
@@ -86,4 +118,6 @@ def get_security_settings() -> SecuritySettings:
         trusted_proxies=_read_trusted_proxies("MINICAM_TRUSTED_PROXIES"),
         cf_access_team_domain=os.environ.get("MINICAM_CF_ACCESS_TEAM_DOMAIN") or None,
         cf_access_aud=os.environ.get("MINICAM_CF_ACCESS_AUD") or None,
+        central_url=central_url,
+        device_token=device_token,
     )
