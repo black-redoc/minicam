@@ -144,6 +144,10 @@ Both return `{ "user_id": 2, "is_active": true }`; a user with no row reads as `
 
 Admins are gated too: an admin who wants to use minicam from outside needs their own WAN access ticked (do it from the LAN first).
 
+### Central mode
+
+With `MINICAM_CENTRAL_URL` and `MINICAM_DEVICE_TOKEN` set (see [Configuration](/doc/configuration)), the central dashboard owns WAN access instead: every 60 s minicam fetches the site's entitlements and sets each user's `wan_access` from them (matched by login email, case-insensitively; anyone not listed is off). `POST /api/auth/wan-access` then answers **`409`** and the Admin page checkbox shows that message. If the dashboard cannot be reached, the last answer keeps working for up to 30 minutes; after that every WAN request and open WAN stream is denied until a sync succeeds. LAN access never depends on it.
+
 ## Admin Page
 
 `GET /admin` (admin-only) serves the user + permission management UI (`app/templates/admin.html`, `app/static/js/admin.js`): create users, list users, delete users, grant/revoke per-camera permissions, and grant/revoke each user's WAN access. Camera CRUD itself (add/edit/remove camera, WS-Discovery) stays on the main dashboard's "Camera settings" modal — see [Multi-Camera Setup](/doc/cameras).

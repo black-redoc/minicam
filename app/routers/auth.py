@@ -343,11 +343,19 @@ async def set_wan_access(
     body: SetWanAccessRequest,
     user_repository: UserRepository = Depends(get_user_repository),
     wan_access_repository: WanAccessRepository = Depends(get_wan_access_repository),
+    settings: SecuritySettings = Depends(get_security_settings),
 ) -> WanAccessPublic:
     """Grant or revoke a user's WAN access. Admin-only.
 
     Takes effect on the user's next request; the gate reads it every time.
+    In central mode the dashboard owns these flags (minicam-admin ADR 0007),
+    so this answers 409 and changes nothing.
     """
+    if settings.central_mode:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "WAN access is managed by the central dashboard",
+        )
     if await user_repository.get_by_id(body.user_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     wan_access = await wan_access_repository.set_active(body.user_id, body.is_active)

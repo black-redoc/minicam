@@ -438,9 +438,24 @@ class TestServiceFactories:
         assert service._permission_repository is repo
 
     def test_get_wan_access_gate_service_wraps_repository(self) -> None:
-        repo = MagicMock()
-        service = dependencies.get_wan_access_gate_service(repo)
+        repo, sync = MagicMock(), MagicMock()
+        standalone = SecuritySettings(jwt_secret="s")
+        service = dependencies.get_wan_access_gate_service(repo, sync, standalone)
         assert service._wan_access_repository is repo
+        assert service._entitlement_sync_repository is None
+
+    def test_get_wan_access_gate_service_checks_sync_in_central_mode(self) -> None:
+        repo, sync = MagicMock(), MagicMock()
+        central = SecuritySettings(
+            jwt_secret="s", central_url="https://admin.example.com", device_token="t"
+        )
+        service = dependencies.get_wan_access_gate_service(repo, sync, central)
+        assert service._entitlement_sync_repository is sync
+
+    def test_get_entitlement_sync_repository_wraps_connection(self) -> None:
+        conn = MagicMock()
+        repo = dependencies.get_entitlement_sync_repository(conn)
+        assert repo._conn is conn
 
     def test_get_stream_access_service_wraps_its_collaborators(self) -> None:
         sessions, users, authz, gate = (
