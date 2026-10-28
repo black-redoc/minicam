@@ -10,6 +10,7 @@ from app.services.camera import RTSPCamera
 from app.services.detection.worker import DetectionSnapshot
 from app.services.live.feed import LiveFeed
 from app.services.ptz import PTZService
+from app.services.usage import UsageMeter
 
 cameras: dict[str, RTSPCamera] = {}
 ptz_services: dict[str, PTZService] = {}
@@ -17,6 +18,8 @@ frame_buffers: dict[str, FrameBuffer] = {}
 live_feeds: dict[str, LiveFeed] = {}
 detection_workers: dict[str, asyncio.Task[None]] = {}
 detection_results: dict[str, DetectionSnapshot | None] = {}
+# Central mode only (minicam-admin ADR 0008): WAN stream bytes not yet in SQLite.
+usage_meter: UsageMeter | None = None
 
 # Dedicated pool for blocking ONVIF/SOAP calls, kept separate from the default
 # executor so a burst of PTZ activity can never delay JPEG frame encoding.

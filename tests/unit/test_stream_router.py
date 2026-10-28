@@ -34,6 +34,7 @@ from app.services.encoder import JPEG_QUALITY, WAN_JPEG_QUALITY
 from app.services.live.feed import LiveFeed
 from app.services.network import NetworkZone
 from app.services.stream_tokens import InvalidStreamTokenError, StreamTokenPayload
+from app.services.usage import UsageMeter
 from tests.fixtures.live import AUDIO_INIT, INIT, open_feed, packet
 
 _USER = User(
@@ -743,6 +744,49 @@ class TestWebSocketStreamAudio:
             self.feed.on_packet(packet(2, kind="audio"))
             assert ws.receive_bytes() == b"\x01"
             assert ws.receive_bytes() == b"\x02"
+
+    def test_wan_video_and_audio_fragments_are_counted(self) -> None:
+        """minicam-admin specs/012 AC6: every binary fMP4 message to a WAN
+        viewer counts; the JSON control messages do not."""
+        app = _app_with_token(audio=True)
+        access = _granting_access()
+        access.viewer_email = AsyncMock(return_value="Viewer@Example.com")
+        app.dependency_overrides[get_stream_access_service] = lambda: access
+        state_module.usage_meter = UsageMeter()
+        try:
+            with (
+                TestClient(app, client=("8.8.8.8", 1)) as client,
+                client.websocket_connect(
+                    "/ws/stream/cam1?token=t&format=fmp4&audio=true"
+                ) as ws,
+            ):
+                ws.receive_json()
+                received = len(ws.receive_bytes())
+                ws.receive_json()
+                self.feed.on_packet(packet(2, kind="audio"))
+                received += len(ws.receive_bytes()) + len(ws.receive_bytes())
+            assert state_module.usage_meter.pending() == {
+                ("viewer@example.com", "cam1"): received
+            }
+        finally:
+            state_module.usage_meter = None
+
+    def test_wan_viewer_without_a_user_is_not_counted(self) -> None:
+        app = _app_with_token(audio=False)
+        access = _granting_access()
+        access.viewer_email = AsyncMock(return_value=None)
+        app.dependency_overrides[get_stream_access_service] = lambda: access
+        state_module.usage_meter = UsageMeter()
+        try:
+            with (
+                TestClient(app, client=("8.8.8.8", 1)) as client,
+                client.websocket_connect("/ws/stream/cam1?token=t&format=fmp4") as ws,
+            ):
+                ws.receive_json()
+                ws.receive_bytes()
+            assert state_module.usage_meter.pending() == {}
+        finally:
+            state_module.usage_meter = None
 
     def test_without_audio_requested_no_audio_is_sent(self) -> None:
         with (

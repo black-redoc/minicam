@@ -113,6 +113,7 @@ class TestVersionedMigrations:
             "0003_recordings",
             "0004_can_listen",
             "0005_entitlement_sync",
+            "0006_usage_counters",
         ]
 
     async def test_applies_pending_migrations_in_name_order(
@@ -183,6 +184,7 @@ class TestVersionedMigrations:
                 "0003_recordings",
                 "0004_can_listen",
                 "0005_entitlement_sync",
+                "0006_usage_counters",
             ]
             cursor = await conn.execute("SELECT email FROM users")
             assert [row[0] for row in await cursor.fetchall()] == ["a@b.c"]

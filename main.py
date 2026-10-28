@@ -14,6 +14,7 @@ from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.repositories.entitlement_sync_repository import (
     SQLiteEntitlementSyncRepository,
 )
+from app.repositories.usage_repository import SQLiteUsageRepository
 from app.routers import auth as auth_router
 from app.routers import dashboard
 from app.routers import docs as docs_router
@@ -37,6 +38,7 @@ from app.services.live.feed import LiveFeed
 from app.services.notifications import runtime as notification_runtime
 from app.services.ptz import PTZConfig, PTZService
 from app.services.recording import runtime as recording_runtime
+from app.services.usage import UsageClient, UsageMeter, UsageService, run_usage_loop
 from app.settings import get_config
 
 logging.basicConfig(
@@ -56,18 +58,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await notification_runtime.start_web_push(conn)
     await recording_runtime.service.start()
 
-    entitlement_http: httpx.AsyncClient | None = None
+    central_http: httpx.AsyncClient | None = None
     entitlement_task: asyncio.Task[None] | None = None
+    usage_task: asyncio.Task[None] | None = None
     central_url = security_settings.central_url
     device_token = security_settings.device_token
     if central_url and device_token:
-        entitlement_http = httpx.AsyncClient()
+        central_http = httpx.AsyncClient()
         sync_service = EntitlementSyncService(
-            EntitlementClient(entitlement_http, central_url, device_token),
+            EntitlementClient(central_http, central_url, device_token),
             SQLiteEntitlementSyncRepository(conn),
         )
         entitlement_task = asyncio.create_task(run_sync_loop(sync_service))
-        logger.info("Central mode: syncing WAN entitlements from the dashboard")
+        state.usage_meter = UsageMeter()
+        usage_service = UsageService(
+            state.usage_meter,
+            SQLiteUsageRepository(conn),
+            UsageClient(central_http, central_url, device_token),
+        )
+        usage_task = asyncio.create_task(run_usage_loop(usage_service))
+        logger.info("Central mode: syncing WAN entitlements and reporting WAN usage")
 
     for cam in config.cameras:
         buf = FrameBuffer()
@@ -116,11 +126,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     yield
 
-    if entitlement_task is not None:
-        entitlement_task.cancel()
-        await asyncio.gather(entitlement_task, return_exceptions=True)
-    if entitlement_http is not None:
-        await entitlement_http.aclose()
+    # Cancelling the usage loop flushes the last counted bytes, so it runs
+    # before the database closes.
+    central_tasks = [t for t in (entitlement_task, usage_task) if t is not None]
+    for task in central_tasks:
+        task.cancel()
+    await asyncio.gather(*central_tasks, return_exceptions=True)
+    state.usage_meter = None
+    if central_http is not None:
+        await central_http.aclose()
     for task in state.detection_workers.values():
         task.cancel()
     await asyncio.gather(*state.detection_workers.values(), return_exceptions=True)
