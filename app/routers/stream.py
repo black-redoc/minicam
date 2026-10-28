@@ -5,7 +5,7 @@ import functools
 import logging
 import time
 import weakref
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from typing import Any, Literal
 
 import numpy as np
@@ -208,6 +208,8 @@ async def stream(
         await websocket.close(code=1008)
         return
 
+    count = await _wan_usage_counter(access, payload, camera_name) if wan else None
+
     await websocket.accept()
     logger.info(
         "Stream client connected: camera=%s client=%s format=%s audio=%s",
@@ -218,9 +220,9 @@ async def stream(
     )
     try:
         if feed is not None and format == "fmp4":
-            sender = _stream_fmp4(websocket, camera_name, feed, audio)
+            sender = _stream_fmp4(websocket, camera_name, feed, audio, count)
         else:
-            sender = _stream_mjpeg(websocket, camera_name, buf, wan)
+            sender = _stream_mjpeg(websocket, camera_name, buf, wan, count)
         await _run_until_disconnect(
             websocket, _while_access_granted(websocket, sender, access, payload, wan)
         )
@@ -231,6 +233,18 @@ async def stream(
     except Exception:
         logger.exception("Stream error: camera=%s", camera_name)
         raise
+
+
+async def _wan_usage_counter(
+    access: StreamAccessService, payload: StreamTokenPayload, camera_name: str
+) -> Callable[[int], None] | None:
+    """In central mode, the callback counting this WAN viewer's stream bytes
+    (minicam-admin ADR 0008); None when usage is not metered."""
+    meter = state.usage_meter
+    if meter is None:
+        return None
+    email = await access.viewer_email(payload)
+    return meter.counter(email, camera_name) if email is not None else None
 
 
 async def _run_until_disconnect(
@@ -306,7 +320,11 @@ async def _wait_for_disconnect(websocket: WebSocket) -> int:
 
 
 async def _stream_mjpeg(
-    websocket: WebSocket, camera_name: str, buf: FrameBuffer, wan: bool = False
+    websocket: WebSocket,
+    camera_name: str,
+    buf: FrameBuffer,
+    wan: bool = False,
+    count: Callable[[int], None] | None = None,
 ) -> None:
     quality = WAN_JPEG_QUALITY if wan else JPEG_QUALITY
     min_interval = 1 / _WAN_MJPEG_MAX_FPS if wan else 0.0
@@ -318,6 +336,8 @@ async def _stream_mjpeg(
         started_at = time.monotonic()
         jpeg = await encoder.encode(frame, render)
         await websocket.send_bytes(jpeg)
+        if count is not None:
+            count(len(jpeg))
         last_frame = frame
         if min_interval:
             # Frames arriving meanwhile are skipped: next_frame returns the latest.
@@ -325,7 +345,11 @@ async def _stream_mjpeg(
 
 
 async def _stream_fmp4(
-    websocket: WebSocket, camera_name: str, feed: LiveFeed, audio: bool = False
+    websocket: WebSocket,
+    camera_name: str,
+    feed: LiveFeed,
+    audio: bool = False,
+    count: Callable[[int], None] | None = None,
 ) -> None:
     """Send the camera's own video (and audio, if asked) as fragmented MP4,
     plus its detections. Without audio=True no audio is ever sent.
@@ -350,6 +374,8 @@ async def _stream_fmp4(
                 await websocket.send_json({"type": "init", "mime": message.mime})
             if message is not None:
                 await websocket.send_bytes(message.data)
+                if count is not None:
+                    count(len(message.data))
             detections = _detections_message(camera_name)
             if detections != sent_detections:
                 await websocket.send_json(detections)

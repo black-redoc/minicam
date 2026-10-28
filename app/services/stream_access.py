@@ -58,6 +58,11 @@ class StreamAccessService:
             return False
         return not wan or await self._wan_access_gate.is_active(user.id)
 
+    async def viewer_email(self, payload: StreamTokenPayload) -> str | None:
+        """The email of the token's user, to count their WAN usage under."""
+        user = await self._user_repository.get_by_id(payload.user_id)
+        return user.email if user is not None else None
+
 
 def _is_past(timestamp: str) -> bool:
     """Fail closed: an unparsable expiry counts as already past."""

@@ -53,7 +53,7 @@ def parse_entitlements(data: object) -> frozenset[str] | None:
             user.get("wan"),
             user.get("reason"),
         )
-        if not _is_email(email) or not isinstance(wan, bool) or reason not in _REASONS:
+        if not is_email(email) or not isinstance(wan, bool) or reason not in _REASONS:
             return None
         if wan != (reason == "ok"):
             return None
@@ -66,7 +66,7 @@ def parse_entitlements(data: object) -> frozenset[str] | None:
     return frozenset(allowed)
 
 
-def _is_email(value: object) -> TypeGuard[str]:
+def is_email(value: object) -> TypeGuard[str]:
     if not isinstance(value, str) or not 0 < len(value) <= MAX_EMAIL_LENGTH:
         return False
     if any(c.isspace() for c in value):

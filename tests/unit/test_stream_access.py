@@ -126,3 +126,13 @@ class TestIsGranted:
         fakes.wan_gate.is_active.return_value = False
         assert await fakes.service.is_granted(_PAYLOAD, wan=False)
         fakes.wan_gate.is_active.assert_not_awaited()
+
+
+class TestViewerEmail:
+    async def test_is_the_token_users_email(self, fakes: _Fakes) -> None:
+        assert await fakes.service.viewer_email(_PAYLOAD) == "viewer@example.com"
+        fakes.users.get_by_id.assert_awaited_once_with(1)
+
+    async def test_deleted_user_has_none(self, fakes: _Fakes) -> None:
+        fakes.users.get_by_id.return_value = None
+        assert await fakes.service.viewer_email(_PAYLOAD) is None
