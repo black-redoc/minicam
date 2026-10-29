@@ -32,6 +32,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: sdist allowlist
+        run: uv run python .github/scripts/check-sdist-allowlist.py
+
       - name: Ruff lint
         run: uv run ruff check .
 
