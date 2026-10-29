@@ -1,0 +1,12 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!-- Lets minicam-mobile find this device on the LAN (DNS-SD _minicam._tcp).
+     Installed as /etc/avahi/services/minicam.service. -->
+<service-group>
+  <name replace-wildcards="yes">minicam on %h</name>
+  <service>
+    <type>_minicam._tcp</type>
+    <port>8080</port>
+    <txt-record>api=1</txt-record>
+  </service>
+</service-group>

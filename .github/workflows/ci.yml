@@ -4,6 +4,8 @@ on:
   push:
     branches: [master]
   pull_request:
+  # The image workflow runs these checks before building a release.
+  workflow_call:
 
 permissions:
   contents: read
@@ -31,6 +33,9 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked
+
+      - name: sdist allowlist
+        run: uv run python .github/scripts/check-sdist-allowlist.py
 
       - name: Ruff lint
         run: uv run ruff check .

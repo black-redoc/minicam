@@ -1,0 +1,16 @@
+[Unit]
+Description=minicam first boot (device secret and hostname)
+# Only until the device has its own .env; it is never overwritten.
+ConditionPathExists=!/opt/minicam/.env
+# After cloud-init, so a hostname set in Raspberry Pi Imager is already in
+# /etc/hostname and is kept.
+After=cloud-init-local.service cloud-init-network.service cloud-init.service cloud-config.service
+Before=minicam.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/minicam-firstboot
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target

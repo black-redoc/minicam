@@ -1,0 +1,23 @@
+# shellcheck shell=bash disable=SC2034
+# pi-gen config for the minicam Raspberry Pi OS image (64-bit Lite, trixie),
+# for Raspberry Pi 4 and 5. Passed to pi-gen's build.sh with -c by
+# .github/workflows/image.yml; pi-gen sources it with bash.
+MINICAM_IMAGE_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+MINICAM_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$MINICAM_IMAGE_DIR/../pyproject.toml" | head -n 1)
+
+IMG_NAME=minicam
+RELEASE=trixie
+ARCHIVE_FILENAME="minicam-v${MINICAM_VERSION}-raspios-trixie-arm64"
+DEPLOY_COMPRESSION=xz
+COMPRESSION_LEVEL=6
+
+# Raspberry Pi OS Lite (stage0-2) plus minicam. stage2's own image export is
+# skipped by the workflow (SKIP_IMAGES) so only the minicam image is built.
+STAGE_LIST="stage0 stage1 stage2 $MINICAM_IMAGE_DIR/stage-minicam"
+
+# pi-gen's defaults: hostname raspberrypi (renamed to minicam-XXXX on first
+# boot), no SSH, and the standard first-boot user setup so Raspberry Pi
+# Imager's customisation (user, Wi-Fi, SSH) still applies.
+TARGET_HOSTNAME=raspberrypi
+ENABLE_SSH=0
+ENABLE_CLOUD_INIT=1

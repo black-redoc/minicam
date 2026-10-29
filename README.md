@@ -105,6 +105,31 @@ AI Detection page) in `app/data/models/`.
 
 ## Deployment
 
+### From the Raspberry Pi OS image
+
+Each [release](https://github.com/black-redoc/minicam/releases) ships
+`minicam-vX.Y.Z-raspios-trixie-arm64.img.xz`: Raspberry Pi OS Lite (64-bit)
+with minicam already installed as a systemd service, for Raspberry Pi 4 and 5.
+
+1. Check the download against its `.sha256` (`sha256sum --check`), then flash
+   it with Raspberry Pi Imager ("Use custom") or any SD card writer. Imager's
+   OS customisation (user, Wi-Fi, SSH, hostname) works as with the stock image.
+2. Connect the Pi to your router with an Ethernet cable and power it on.
+3. On first boot the Pi creates its own `/opt/minicam/.env` with a new
+   `MINICAM_JWT_SECRET` (none is shipped in the image) and, unless you chose a
+   hostname in Imager, renames itself `minicam-XXXX` (the last four hex digits
+   of its MAC address).
+4. Open `http://minicam-XXXX.local:8080` from a device on the same LAN and
+   create the admin account (see [First login](#first-login)).
+
+minicam lives in `/opt/minicam` and runs as the `minicam` system user with the
+same sandboxed unit as below (`deploy/minicam.service` plus the
+`minicam.service.d/image.conf` drop-in). To set the remaining values
+(Cloudflare, central dashboard), edit `/opt/minicam/.env` as root and run
+`sudo systemctl restart minicam`.
+
+### Manual install
+
 Copy `.env.example` to `.env`, generate `MINICAM_JWT_SECRET` as described in
 [Initial Setup](app/docs/configuration.md#initial-setup-creating-minicam_jwt_secret),
 and fill in the remaining values (see the comments in that file, or

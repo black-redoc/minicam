@@ -1,0 +1,2 @@
+# The minicam image is the only one exported; no "-lite" style suffix.
+IMG_SUFFIX=""
