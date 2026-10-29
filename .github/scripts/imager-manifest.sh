@@ -20,8 +20,30 @@ download_size=$(wc -c <"$xz" | tr -d ' ')
 download_sha256=$(sha256sum "$xz" | cut -d' ' -f1)
 release_date=$(date -u +%Y-%m-%d)
 
+# Imager builds its "choose your device" step from imager.devices, so a
+# repository without it fails to load; these mirror the official entries.
 cat <<EOF
 {
+  "imager": {
+    "devices": [
+      {
+        "name": "Raspberry Pi 5",
+        "tags": ["pi5-64bit"],
+        "icon": "https://downloads.raspberrypi.com/imager/icons/RPi_5.png",
+        "description": "Raspberry Pi 5, 500 / 500+, and Compute Module 5",
+        "matching_type": "exclusive",
+        "capabilities": []
+      },
+      {
+        "name": "Raspberry Pi 4",
+        "tags": ["pi4-64bit"],
+        "icon": "https://downloads.raspberrypi.com/imager/icons/RPi_4.png",
+        "description": "Raspberry Pi 4 Model B, 400, and Compute Module 4 / 4S",
+        "matching_type": "inclusive",
+        "capabilities": []
+      }
+    ]
+  },
   "os_list": [
     {
       "name": "minicam $tag",
