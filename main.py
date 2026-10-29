@@ -25,6 +25,7 @@ from app.routers import ptz as ptz_router
 from app.routers import recordings as recordings_router
 from app.routers import setup as setup_router
 from app.routers import stream as stream_router
+from app.routers import system as system_router
 from app.security_settings import get_security_settings
 from app.services.camera import RTSPCamera
 from app.services.detection.factory import get_detection_backend
@@ -172,3 +173,4 @@ app.include_router(health_router.router)
 app.include_router(mobile_router.router)
 app.include_router(notifications_router.router)
 app.include_router(recordings_router.router)
+app.include_router(system_router.router)

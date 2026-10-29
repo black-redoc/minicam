@@ -1,0 +1,222 @@
+#!/usr/bin/python3 -I
+"""Root helper for Cloudflare Tunnel set up from minicam-mobile (ADR 0008).
+
+minicam (unprivileged, sandboxed) writes /opt/minicam/.tunnel/request.json;
+minicam-tunnel.path then starts this script as root through
+minicam-tunnel.service. It accepts exactly two actions:
+
+    {"action": "install", "token": "<tunnel token>"}
+        install cloudflared from Cloudflare's signed apt repository (key
+        pinned by SHA-256), store the token in /etc/minicam/tunnel.env
+        (root, 0600) and (re)start minicam-cloudflared.service
+    {"action": "remove"}
+        stop and disable minicam-cloudflared.service, delete the token
+
+It validates the request itself (it trusts nothing minicam wrote), always
+deletes it, and reports progress in /opt/minicam/.tunnel/status.json.
+Standard library only: it runs with the system Python (3.13 on Raspberry Pi
+OS trixie), not minicam's venv, so it must stay valid Python 3.13.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+import uuid
+from collections.abc import Callable, Sequence
+from pathlib import Path
+
+# Cloudflare's apt repository (https://pkg.cloudflare.com). If Cloudflare
+# rotates the key, update both values from the URL below.
+KEY_URL = "https://pkg.cloudflare.com/cloudflare-main.gpg"
+KEY_SHA256 = "1bd95f4082b320d541bee351560fc2765aa9f9cd8efa4c9e32135e63f252721d"
+KEYRING = "usr/share/keyrings/cloudflare-main.gpg"
+SOURCES = "etc/apt/sources.list.d/cloudflared.list"
+SOURCES_LINE = (
+    "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] "
+    "https://pkg.cloudflare.com/cloudflared any main\n"
+)
+TOKEN_ENV = "etc/minicam/tunnel.env"
+HELPER_DIR = "opt/minicam/.tunnel"
+UNIT = "minicam-cloudflared.service"
+MAX_TOKEN_LENGTH = 2048
+_ACCOUNT_ID = re.compile(r"[0-9a-f]{32}")
+
+Runner = Callable[[Sequence[str]], None]
+Fetcher = Callable[[str], bytes]
+
+
+class HelperError(Exception):
+    """A failure to report to the admin as is (no secrets in the message)."""
+
+
+def is_valid_token(token: object) -> bool:
+    """Same rule as minicam's app/services/tunnel.py, checked again here."""
+    if not isinstance(token, str) or not token or len(token) > MAX_TOKEN_LENGTH:
+        return False
+    try:
+        decoded = json.loads(base64.b64decode(token, validate=True))
+    except (binascii.Error, ValueError):
+        return False
+    if not isinstance(decoded, dict):
+        return False
+    account, tunnel, secret = decoded.get("a"), decoded.get("t"), decoded.get("s")
+    if not (
+        isinstance(account, str) and isinstance(tunnel, str) and isinstance(secret, str)
+    ):
+        return False
+    try:
+        uuid.UUID(tunnel)
+    except ValueError:
+        return False
+    return _ACCOUNT_ID.fullmatch(account) is not None and len(secret) > 0
+
+
+def parse_request(raw: str) -> dict[str, str]:
+    try:
+        request = json.loads(raw)
+    except ValueError:
+        raise HelperError("The request is not valid JSON") from None
+    if not isinstance(request, dict):
+        raise HelperError("The request is not a JSON object")
+    action = request.get("action")
+    if action == "remove" and set(request) == {"action"}:
+        return {"action": "remove"}
+    if action == "install" and set(request) == {"action", "token"}:
+        if not is_valid_token(request["token"]):
+            raise HelperError("The tunnel token is not valid")
+        return {"action": "install", "token": request["token"]}
+    raise HelperError("Unknown request")
+
+
+def run(argv: Sequence[str]) -> None:
+    result = subprocess.run(
+        list(argv),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+        timeout=600,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()[-1:] or [""]
+        raise HelperError(f"{argv[0]} failed: {detail[0]}")
+
+
+def fetch(url: str) -> bytes:
+    try:
+        # pkg.cloudflare.com answers 403 to urllib's default User-Agent.
+        request = urllib.request.Request(url, headers={"User-Agent": "minicam-tunnel"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return bytes(response.read())
+    except OSError as exc:
+        raise HelperError(f"Could not download {url}: {exc}") from None
+
+
+class Helper:
+    def __init__(
+        self,
+        root: Path = Path("/"),
+        runner: Runner = run,
+        fetcher: Fetcher = fetch,
+        is_active: Callable[[], bool] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.root = root
+        self.helper_dir = root / HELPER_DIR
+        self.run = runner
+        self.fetch = fetcher
+        self.is_active = is_active or self._unit_is_active
+        self.sleep = sleep
+
+    def status(self, state: str, message: str | None = None) -> None:
+        path = self.helper_dir / "status.json"
+        tmp = path.with_name("status.json.tmp")
+        tmp.write_text(json.dumps({"state": state, "message": message}))
+        tmp.chmod(0o644)
+        os.replace(tmp, path)
+
+    def handle(self) -> None:
+        request_path = self.helper_dir / "request.json"
+        try:
+            raw = request_path.read_text()
+        except FileNotFoundError:
+            return
+        finally:
+            # Always consumed: a bad request must not retrigger the path unit.
+            request_path.unlink(missing_ok=True)
+        try:
+            request = parse_request(raw)
+            if request["action"] == "install":
+                self.install(request["token"])
+            else:
+                self.remove()
+        except HelperError as exc:
+            self.status("error", str(exc))
+
+    def install(self, token: str) -> None:
+        self.status("installing", "Installing cloudflared")
+        self.install_cloudflared()
+        self.status("installing", "Starting the tunnel")
+        self.write_token(token)
+        self.run(["systemctl", "daemon-reload"])
+        self.run(["systemctl", "enable", UNIT])
+        self.run(["systemctl", "restart", UNIT])
+        for _ in range(15):
+            if self.is_active():
+                self.status("running")
+                return
+            self.sleep(2)
+        raise HelperError("cloudflared did not start; see journalctl -u " + UNIT)
+
+    def install_cloudflared(self) -> None:
+        key = self.fetch(KEY_URL)
+        if hashlib.sha256(key).hexdigest() != KEY_SHA256:
+            raise HelperError("Cloudflare's repository key does not match the pin")
+        keyring = self.root / KEYRING
+        keyring.parent.mkdir(parents=True, exist_ok=True)
+        keyring.write_bytes(key)
+        keyring.chmod(0o644)
+        sources = self.root / SOURCES
+        sources.parent.mkdir(parents=True, exist_ok=True)
+        sources.write_text(SOURCES_LINE)
+        self.run(["apt-get", "update"])
+        self.run(["apt-get", "install", "-y", "--no-install-recommends", "cloudflared"])
+
+    def write_token(self, token: str) -> None:
+        path = self.root / TOKEN_ENV
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        tmp = path.with_name("tunnel.env.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(f"TUNNEL_TOKEN={token}\n")
+        os.replace(tmp, path)
+
+    def remove(self) -> None:
+        self.run(["systemctl", "disable", "--now", UNIT])
+        (self.root / TOKEN_ENV).unlink(missing_ok=True)
+        self.status("none")
+
+    def _unit_is_active(self) -> bool:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", UNIT], check=False
+        )
+        return result.returncode == 0
+
+
+def main() -> int:
+    Helper().handle()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

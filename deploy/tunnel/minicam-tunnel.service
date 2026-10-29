@@ -1,0 +1,13 @@
+# Root helper for Cloudflare Tunnel set up from minicam-mobile (ADR 0008):
+# installs cloudflared and starts or stops minicam-cloudflared.service.
+# Started by minicam-tunnel.path; see /usr/local/sbin/minicam-tunnel.
+[Unit]
+Description=Apply minicam's Cloudflare Tunnel request
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/minicam-tunnel
+PrivateTmp=true
+ProtectHome=true

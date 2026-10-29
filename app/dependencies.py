@@ -49,6 +49,7 @@ from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.network import NetworkZone, classify_network
 from app.services.stream_access import StreamAccessService
 from app.services.stream_tokens import StreamTokenService, UsedStreamTokens
+from app.services.tunnel import TunnelService, tunnel_dir
 from app.services.wan_access import WanAccessGateService
 
 SESSION_COOKIE_NAME = "minicam_session"
@@ -162,6 +163,11 @@ def get_stream_access_service(
     return StreamAccessService(
         session_repository, user_repository, authorization_service, wan_access_gate
     )
+
+
+@lru_cache
+def get_tunnel_service() -> TunnelService:
+    return TunnelService(tunnel_dir())
 
 
 @lru_cache
