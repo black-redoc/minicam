@@ -11,7 +11,10 @@ app="${ROOTFS_DIR}/opt/minicam"
 
 install -d -m 755 "${app}"
 tar -xf files/minicam.tar -C "${app}"
-install -m 755 files/uv "${ROOTFS_DIR}/tmp/uv"
+# Not in /tmp: on_chroot mounts an empty tmpfs over the rootfs /tmp.
+build_dir="${ROOTFS_DIR}/var/tmp/minicam-build"
+install -d -m 755 "${build_dir}"
+install -m 755 files/uv "${build_dir}/uv"
 
 on_chroot <<'EOF'
 adduser --system --group --home /opt/minicam --no-create-home \
@@ -22,11 +25,11 @@ export UV_PYTHON_INSTALL_DIR=/opt/minicam/.python
 export UV_PYTHON_PREFERENCE=only-managed
 export UV_CACHE_DIR=/tmp/uv-cache
 export UV_LINK_MODE=copy
-/tmp/uv python install 3.14
-/tmp/uv sync --locked --no-dev --python 3.14
+/var/tmp/minicam-build/uv python install 3.14
+/var/tmp/minicam-build/uv sync --locked --no-dev --python 3.14
 chown -R minicam:minicam /opt/minicam
 EOF
-rm -f "${ROOTFS_DIR}/tmp/uv"
+rm -rf "${build_dir}"
 
 files="${app}/image/files"
 install -m 644 "${app}/deploy/minicam.service" "${ROOTFS_DIR}/etc/systemd/system/minicam.service"
