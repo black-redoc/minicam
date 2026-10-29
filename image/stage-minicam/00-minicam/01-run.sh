@@ -39,6 +39,15 @@ install -m 644 "${files}/minicam-firstboot.service" "${ROOTFS_DIR}/etc/systemd/s
 install -m 755 "${files}/minicam-firstboot.sh" "${ROOTFS_DIR}/usr/local/sbin/minicam-firstboot"
 install -m 644 "${files}/minicam.avahi.service" "${ROOTFS_DIR}/etc/avahi/services/minicam.service"
 
+# Cloudflare Tunnel from minicam-mobile: root helper, started when minicam
+# writes /opt/minicam/.tunnel/request.json (ADR 0008).
+tunnel="${app}/deploy/tunnel"
+install -m 755 "${tunnel}/minicam-tunnel" "${ROOTFS_DIR}/usr/local/sbin/minicam-tunnel"
+for unit in minicam-tunnel.path minicam-tunnel.service minicam-cloudflared.service; do
+	install -m 644 "${tunnel}/${unit}" "${ROOTFS_DIR}/etc/systemd/system/${unit}"
+done
+
 on_chroot <<'EOF'
-systemctl enable minicam-firstboot.service minicam.service
+install -d -m 700 -o minicam -g minicam /opt/minicam/.tunnel
+systemctl enable minicam-firstboot.service minicam.service minicam-tunnel.path
 EOF

@@ -2,6 +2,14 @@
 
 minicam is reachable from outside the local network without opening a port or having a public IP. This page covers how that path is wired end-to-end: `cloudflared`, Cloudflare Access, and the three environment variables (`MINICAM_TRUSTED_PROXIES`, `MINICAM_CF_ACCESS_TEAM_DOMAIN`, `MINICAM_CF_ACCESS_AUD`) that make FastAPI aware of it. See also [Authentication & Authorization](/doc/auth#wan-access-gate) for the `wan_access` grant this layer sits alongside, and [Configuration](/doc/configuration#security-settings) for the full environment variable reference.
 
+## Setup from the mobile app
+
+On the Raspberry Pi OS image, an admin can do the whole setup below from minicam-mobile (Admin → Remote access) while on the LAN. The app uses a Cloudflare API token you paste into it (only for that setup; it is never stored or sent to the Pi) to create the tunnel, its route to `http://127.0.0.1:8080`, the DNS record and the Access application and policy. It then sends minicam only the tunnel token, the hostname, the team domain and the AUD tag through `POST /api/system/tunnel` (admins, LAN only).
+
+minicam never runs anything as root. It stores the Access settings in `tunnel.json` (applied at once, no restart; `MINICAM_CF_ACCESS_*` in `.env` still take precedence) and writes `.tunnel/request.json`; the root helper `/usr/local/sbin/minicam-tunnel` (started by `minicam-tunnel.path`) installs `cloudflared` from Cloudflare's signed apt repository, keeps the token in `/etc/minicam/tunnel.env` (root only) and runs `minicam-cloudflared.service`. `GET /api/system/tunnel` reports `installing`, `running` or `error` with the helper's message; `DELETE` stops the tunnel. Once a tunnel has been set up this way, `127.0.0.1` always counts as a trusted proxy, so tunnel traffic is never treated as LAN.
+
+On a manual install, the same helper works after copying `deploy/tunnel/minicam-tunnel` to `/usr/local/sbin/`, the three units in `deploy/tunnel/` to `/etc/systemd/system/`, enabling `minicam-tunnel.path` and creating `.tunnel/` in the checkout, owned by the app's user. The helper expects the checkout at `/opt/minicam`; otherwise follow the manual steps below.
+
 ## Setup, step by step
 
 Prerequisites: a domain whose DNS is managed by Cloudflare, a Cloudflare Zero Trust organization (its team name gives you `https://<team>.cloudflareaccess.com`), and minicam already running under systemd with a valid `.env` (see [Configuration](/doc/configuration#initial-setup-creating-minicam_jwt_secret)).

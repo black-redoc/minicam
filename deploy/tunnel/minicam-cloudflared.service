@@ -1,0 +1,39 @@
+# Cloudflare Tunnel for minicam, set up from minicam-mobile (ADR 0008).
+# The token is read from a root-only file, so it never shows in ps or in
+# `systemctl cat`, unlike `cloudflared service install <token>`.
+[Unit]
+Description=Cloudflare Tunnel for minicam
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/minicam/tunnel.env
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/minicam/tunnel.env
+# apt keeps cloudflared up to date; the binary must not replace itself.
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run
+Restart=on-failure
+RestartSec=5s
+
+DynamicUser=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

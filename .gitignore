@@ -142,3 +142,7 @@ graphify-out/
 # Raspberry Pi OS image (staged by .github/workflows/image.yml)
 # =============================================================================
 image/stage-minicam/00-minicam/files/
+
+# Cloudflare Tunnel set up from minicam-mobile (app/services/tunnel.py)
+tunnel.json
+.tunnel/

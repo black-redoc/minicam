@@ -13,6 +13,8 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from app.services.tunnel import read_tunnel_settings
+
 _DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24
 _DEFAULT_STREAM_TOKEN_TTL_SECONDS = 30
 _DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "minicam.db"
@@ -86,6 +88,26 @@ def _read_trusted_proxies(env_var: str) -> frozenset[str]:
     return frozenset(ip.strip() for ip in raw.split(",") if ip.strip())
 
 
+def _read_access() -> tuple[frozenset[str], str | None, str | None]:
+    """Trusted proxies and Cloudflare Access settings.
+
+    From the environment, else from the tunnel the mobile app set up
+    (app/services/tunnel.py, ADR 0008). With such a tunnel, cloudflared
+    reaches minicam from 127.0.0.1, so loopback is always a trusted proxy
+    (WAN): tunnel traffic must never be classified as LAN.
+    """
+    trusted_proxies = _read_trusted_proxies("MINICAM_TRUSTED_PROXIES")
+    team_domain = os.environ.get("MINICAM_CF_ACCESS_TEAM_DOMAIN") or None
+    aud = os.environ.get("MINICAM_CF_ACCESS_AUD") or None
+    tunnel = read_tunnel_settings()
+    if tunnel is None:
+        return trusted_proxies, team_domain, aud
+    trusted_proxies |= {"127.0.0.1"}
+    if team_domain is None and aud is None and tunnel.access is not None:
+        team_domain, aud = tunnel.access.team_domain, tunnel.access.aud
+    return trusted_proxies, team_domain, aud
+
+
 @lru_cache
 def get_security_settings() -> SecuritySettings:
     """Build settings from the environment.
@@ -106,6 +128,7 @@ def get_security_settings() -> SecuritySettings:
     central_url, device_token = _read_central(
         "MINICAM_CENTRAL_URL", "MINICAM_DEVICE_TOKEN"
     )
+    trusted_proxies, team_domain, aud = _read_access()
     return SecuritySettings(
         jwt_secret=secret,
         session_ttl_seconds=_read_int(
@@ -115,9 +138,9 @@ def get_security_settings() -> SecuritySettings:
             "MINICAM_STREAM_TOKEN_TTL_SECONDS", _DEFAULT_STREAM_TOKEN_TTL_SECONDS
         ),
         db_path=os.environ.get("MINICAM_DB_PATH", str(_DEFAULT_DB_PATH)),
-        trusted_proxies=_read_trusted_proxies("MINICAM_TRUSTED_PROXIES"),
-        cf_access_team_domain=os.environ.get("MINICAM_CF_ACCESS_TEAM_DOMAIN") or None,
-        cf_access_aud=os.environ.get("MINICAM_CF_ACCESS_AUD") or None,
+        trusted_proxies=trusted_proxies,
+        cf_access_team_domain=team_domain,
+        cf_access_aud=aud,
         central_url=central_url,
         device_token=device_token,
     )

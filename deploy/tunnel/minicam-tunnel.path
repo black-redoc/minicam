@@ -1,0 +1,11 @@
+# Starts minicam-tunnel.service when minicam asks for a Cloudflare Tunnel
+# change (ADR 0008). minicam only writes this one file; the helper acts on it.
+[Unit]
+Description=Watch for minicam's Cloudflare Tunnel requests
+
+[Path]
+PathExists=/opt/minicam/.tunnel/request.json
+Unit=minicam-tunnel.service
+
+[Install]
+WantedBy=multi-user.target
