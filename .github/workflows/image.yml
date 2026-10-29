@@ -73,6 +73,8 @@ jobs:
           sudo GIT_HASH="$PI_GEN_COMMIT" ./build.sh -c "$GITHUB_WORKSPACE/image/config"
           # Each stage keeps a full root filesystem; free the disk for the checks.
           sudo rm -rf work
+          # pi-gen ran as root; the next steps write next to its output.
+          sudo chown -R "$(id -u):$(id -g)" deploy
 
       - name: Check image
         run: |
