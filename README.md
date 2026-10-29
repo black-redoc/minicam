@@ -111,9 +111,13 @@ Each [release](https://github.com/black-redoc/minicam/releases) ships
 `minicam-vX.Y.Z-raspios-trixie-arm64.img.xz`: Raspberry Pi OS Lite (64-bit)
 with minicam already installed as a systemd service, for Raspberry Pi 4 and 5.
 
-1. Check the download against its `.sha256` (`sha256sum --check`), then flash
-   it with Raspberry Pi Imager ("Use custom") or any SD card writer. Imager's
-   OS customisation (user, Wi-Fi, SSH, hostname) works as with the stock image.
+1. Flash it with Raspberry Pi Imager from the release's Imager repository, so
+   Imager offers OS customisation (user, Wi-Fi, SSH, hostname) as with the
+   stock image: App Options → Content Repository → custom URL
+   `https://github.com/black-redoc/minicam/releases/latest/download/minicam-imager.json`,
+   then pick "minicam" as the OS. ("Use custom" with the downloaded `.img.xz`,
+   checked with `sha256sum --check`, also works, but Imager disables
+   customisation for local files.)
 2. Connect the Pi to your router with an Ethernet cable and power it on.
 3. On first boot the Pi creates its own `/opt/minicam/.env` with a new
    `MINICAM_JWT_SECRET` (none is shipped in the image) and, unless you chose a
