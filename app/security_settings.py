@@ -13,6 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from app.services.central_config import read_central_file
 from app.services.tunnel import read_tunnel_settings
 
 _DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24
@@ -66,11 +67,16 @@ def _reject_placeholders() -> None:
 
 
 def _read_central(url_var: str, token_var: str) -> tuple[str | None, str | None]:
-    """Both set (HTTPS, or plain HTTP to localhost for development) or neither."""
+    """Both set (HTTPS, or plain HTTP to localhost for development) or neither.
+
+    Neither in the environment: the dashboard the app paired with (central.json).
+    """
     url = os.environ.get(url_var, "").strip() or None
     token = os.environ.get(token_var, "").strip() or None
     if url is None and token is None:
-        return None, None
+        # Not in .env: the dashboard the app paired this device with, if any (ADR 0009).
+        paired = read_central_file()
+        return (paired.url, paired.device_token) if paired else (None, None)
     if url is None or token is None:
         raise RuntimeError(
             f"{url_var} and {token_var} must be set together to fetch WAN "

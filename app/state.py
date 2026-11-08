@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING
 
 from app.buffers.frame_buffer import FrameBuffer
 from app.services.camera import RTSPCamera
@@ -11,6 +12,9 @@ from app.services.detection.worker import DetectionSnapshot
 from app.services.live.feed import LiveFeed
 from app.services.ptz import PTZService
 from app.services.usage import UsageMeter
+
+if TYPE_CHECKING:
+    from app.services.central import CentralRuntime
 
 cameras: dict[str, RTSPCamera] = {}
 ptz_services: dict[str, PTZService] = {}
@@ -20,6 +24,8 @@ detection_workers: dict[str, asyncio.Task[None]] = {}
 detection_results: dict[str, DetectionSnapshot | None] = {}
 # Central mode only (minicam-admin ADR 0008): WAN stream bytes not yet in SQLite.
 usage_meter: UsageMeter | None = None
+# Entitlement sync + usage loops; started at boot or when the app pairs (ADR 0009).
+central_runtime: CentralRuntime | None = None
 
 # Dedicated pool for blocking ONVIF/SOAP calls, kept separate from the default
 # executor so a burst of PTZ activity can never delay JPEG frame encoding.
