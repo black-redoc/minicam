@@ -17,6 +17,7 @@ from app.dependencies import (
     get_password_hasher,
     get_permission_repository,
     get_session_repository,
+    get_setup_claim_service,
     get_token_service,
     get_user_repository,
     get_wan_access_repository,
@@ -28,6 +29,7 @@ from app.models.auth import (
     FirstAdminRequest,
     LoginRequest,
     SetPermissionRequest,
+    SetupClaimResponse,
     SetupStatusResponse,
     SetWanAccessRequest,
     UserPublic,
@@ -42,6 +44,14 @@ from app.security_settings import SecuritySettings, get_security_settings
 from app.services.auth import InvalidSessionTokenError, PasswordHasher, TokenService
 from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.network import NetworkZone
+from app.services.setup_claim import (
+    CODE_DIGITS,
+    ClaimError,
+    ClaimMode,
+    LedUnavailableError,
+    SetupClaimService,
+    TooSoonError,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -105,9 +115,53 @@ async def login(
 @router.get("/setup", response_model=SetupStatusResponse)
 async def setup_status(
     user_repository: UserRepository = Depends(get_user_repository),
+    network_zone: NetworkZone = Depends(get_network_zone),
+    claim_service: SetupClaimService = Depends(get_setup_claim_service),
 ) -> SetupStatusResponse:
-    """Report whether first-run setup is still pending (no user exists yet)."""
-    return SetupStatusResponse(setup_required=await user_repository.count_users() == 0)
+    """Report whether first-run setup is still pending (no user exists yet).
+
+    Public, for the login page and the apps. The window is only ever open
+    for LAN clients, since setup is LAN-only.
+    """
+    setup_required = await user_repository.count_users() == 0
+    seconds_left = claim_service.window_seconds_left()
+    window_open = (
+        setup_required and network_zone is NetworkZone.LAN and seconds_left > 0
+    )
+    return SetupStatusResponse(
+        setup_required=setup_required,
+        claim=claim_service.mode.value,
+        window_open=window_open,
+        window_seconds_left=seconds_left if window_open else 0,
+    )
+
+
+@router.post("/setup/claim", response_model=SetupClaimResponse)
+async def request_setup_code(
+    user_repository: UserRepository = Depends(get_user_repository),
+    network_zone: NetworkZone = Depends(get_network_zone),
+    claim_service: SetupClaimService = Depends(get_setup_claim_service),
+) -> SetupClaimResponse:
+    """Blink a new setup code on the device's LED (LED claim only, ADR 0006).
+
+    The code itself is never returned: whoever sets the device up has to
+    read it from the LED, which proves they can see the device.
+    """
+    if network_zone is not NetworkZone.LAN:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _SETUP_LAN_ONLY_MESSAGE)
+    if claim_service.mode is not ClaimMode.LED:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    if await user_repository.count_users() > 0:
+        raise HTTPException(status.HTTP_409_CONFLICT, _SETUP_DONE_MESSAGE)
+    try:
+        expires_in = await claim_service.issue_code()
+    except TooSoonError as exc:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, str(exc)) from exc
+    except LedUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except ClaimError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    return SetupClaimResponse(digits=CODE_DIGITS, expires_in=expires_in)
 
 
 @router.post("/setup", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
@@ -121,21 +175,33 @@ async def complete_setup(
     token_service: TokenService = Depends(get_token_service),
     settings: SecuritySettings = Depends(get_security_settings),
     network_zone: NetworkZone = Depends(get_network_zone),
+    claim_service: SetupClaimService = Depends(get_setup_claim_service),
 ) -> UserPublic:
     """Create the first admin account and sign it in.
 
     Only works while the users table is empty, and only from the LAN: an
     unconfigured device must not be claimable by whoever reaches it first
     through the tunnel. Once any account exists this returns 409 forever.
+    With the LED claim it also needs the code the LED blinks (ADR 0006).
     """
     if network_zone is not NetworkZone.LAN:
         raise HTTPException(status.HTTP_403_FORBIDDEN, _SETUP_LAN_ONLY_MESSAGE)
+    if await user_repository.count_users() > 0:
+        raise HTTPException(status.HTTP_409_CONFLICT, _SETUP_DONE_MESSAGE)
+
+    if claim_service.mode is ClaimMode.LED:
+        try:
+            await claim_service.verify(body.setup_code)
+        except ClaimError as exc:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
 
     user = await user_repository.create_first_admin(
         body.email, password_hasher.hash(body.password)
     )
     if user is None:
         raise HTTPException(status.HTTP_409_CONFLICT, _SETUP_DONE_MESSAGE)
+    if claim_service.mode is ClaimMode.LED:
+        await claim_service.complete()
 
     await _open_session(
         user,

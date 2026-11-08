@@ -5,6 +5,7 @@ turns repositories + services into `Depends()`-usable callables.
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 import aiosqlite
 import jwt
@@ -47,6 +48,7 @@ from app.services.cloudflare_access import (
 )
 from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.network import NetworkZone, classify_network
+from app.services.setup_claim import ClaimMode, SetupClaimService, SysfsLed
 from app.services.stream_access import StreamAccessService
 from app.services.stream_tokens import StreamTokenService, UsedStreamTokens
 from app.services.tunnel import TunnelService, tunnel_dir
@@ -162,6 +164,15 @@ def get_stream_access_service(
 ) -> StreamAccessService:
     return StreamAccessService(
         session_repository, user_repository, authorization_service, wan_access_gate
+    )
+
+
+@lru_cache
+def get_setup_claim_service() -> SetupClaimService:
+    """Singleton: it holds the current code and the window's counters."""
+    settings = get_security_settings()
+    return SetupClaimService(
+        ClaimMode(settings.setup_claim), SysfsLed(Path(settings.setup_led_path))
     )
 
 

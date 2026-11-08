@@ -15,7 +15,8 @@ Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unle
 | `POST` | `/api/detection/catalog/install` | admin | Install (and activate) a catalog model by name |
 | `POST` | `/api/auth/login` | none | Log in, set session cookie |
 | `GET` | `/api/auth/setup` | none | Whether first-run setup is pending |
-| `POST` | `/api/auth/setup` | none (LAN, only while no user exists) | Create the first admin and sign in |
+| `POST` | `/api/auth/setup/claim` | none (LAN, LED claim, setup window) | Blink a setup code on the device's LED |
+| `POST` | `/api/auth/setup` | none (LAN, only while no user exists; LED code with the LED claim) | Create the first admin and sign in |
 | `POST` | `/api/auth/logout` | session (optional) | Revoke session, clear cookie |
 | `GET` | `/api/auth/me` | session | Current user |
 | `POST` | `/api/auth/users` | admin | Create a user |

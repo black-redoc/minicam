@@ -19,6 +19,8 @@ _DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24
 _DEFAULT_STREAM_TOKEN_TTL_SECONDS = 30
 _DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "minicam.db"
 _JWT_ALGORITHM = "HS256"
+_DEFAULT_SETUP_LED_PATH = "/sys/class/leds/ACT"
+_SETUP_CLAIMS = frozenset({"none", "led"})
 
 # Values shipped in .env.example. Running with any of them is always a
 # mistake: the JWT secret is public, and the Cloudflare Access ones make every
@@ -44,6 +46,9 @@ class SecuritySettings:
     # dashboard. The token is a secret, so it is kept out of repr() and logs.
     central_url: str | None = None
     device_token: str | None = field(default=None, repr=False)
+    # First-admin claim (ADR 0006): "led" on the Raspberry Pi OS image.
+    setup_claim: str = "none"
+    setup_led_path: str = _DEFAULT_SETUP_LED_PATH
 
     @property
     def central_mode(self) -> bool:
@@ -129,6 +134,9 @@ def get_security_settings() -> SecuritySettings:
         "MINICAM_CENTRAL_URL", "MINICAM_DEVICE_TOKEN"
     )
     trusted_proxies, team_domain, aud = _read_access()
+    setup_claim = os.environ.get("MINICAM_SETUP_CLAIM", "").strip() or "none"
+    if setup_claim not in _SETUP_CLAIMS:
+        raise RuntimeError("MINICAM_SETUP_CLAIM must be 'none' or 'led'")
     return SecuritySettings(
         jwt_secret=secret,
         session_ttl_seconds=_read_int(
@@ -143,4 +151,7 @@ def get_security_settings() -> SecuritySettings:
         cf_access_aud=aud,
         central_url=central_url,
         device_token=device_token,
+        setup_claim=setup_claim,
+        setup_led_path=os.environ.get("MINICAM_SETUP_LED_PATH")
+        or _DEFAULT_SETUP_LED_PATH,
     )

@@ -38,6 +38,7 @@ install -m 644 "${files}/image.conf" "${ROOTFS_DIR}/etc/systemd/system/minicam.s
 install -m 644 "${files}/minicam-firstboot.service" "${ROOTFS_DIR}/etc/systemd/system/minicam-firstboot.service"
 install -m 755 "${files}/minicam-firstboot.sh" "${ROOTFS_DIR}/usr/local/sbin/minicam-firstboot"
 install -m 644 "${files}/minicam.avahi.service" "${ROOTFS_DIR}/etc/avahi/services/minicam.service"
+install -m 644 "${files}/90-minicam-led.rules" "${ROOTFS_DIR}/etc/udev/rules.d/90-minicam-led.rules"
 
 # Cloudflare Tunnel from minicam-mobile: root helper, started when minicam
 # writes /opt/minicam/.tunnel/request.json (ADR 0008).

@@ -1,0 +1,4 @@
+# Lets the minicam service blink the setup code on the green ACT LED (ADR 0006):
+# group minicam may write that LED's trigger and brightness, nothing else.
+# Installed as /etc/udev/rules.d/90-minicam-led.rules.
+SUBSYSTEM=="leds", KERNEL=="ACT", RUN+="/bin/chgrp minicam /sys%p/trigger /sys%p/brightness", RUN+="/bin/chmod g+w /sys%p/trigger /sys%p/brightness"

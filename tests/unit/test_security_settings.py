@@ -106,3 +106,19 @@ def test_invalid_central_config_refuses_to_start(
     with pytest.raises(RuntimeError, match=message) as exc_info:
         get_security_settings()
     assert _TOKEN not in str(exc_info.value)
+
+
+def test_setup_claim_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert get_security_settings().setup_claim == "none"
+    get_security_settings.cache_clear()
+
+    monkeypatch.setenv("MINICAM_SETUP_CLAIM", "led")
+    monkeypatch.setenv("MINICAM_SETUP_LED_PATH", "/sys/class/leds/PWR")
+    settings = get_security_settings()
+    assert settings.setup_claim == "led"
+    assert settings.setup_led_path == "/sys/class/leds/PWR"
+    get_security_settings.cache_clear()
+
+    monkeypatch.setenv("MINICAM_SETUP_CLAIM", "bluetooth")
+    with pytest.raises(RuntimeError, match="MINICAM_SETUP_CLAIM"):
+        get_security_settings()

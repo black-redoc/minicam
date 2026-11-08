@@ -40,10 +40,22 @@ class FirstAdminRequest(BaseModel):
 
     email: str = Field(..., min_length=1)
     password: str = Field(..., min_length=8)
+    # The code blinked by the LED, when the device uses the LED claim (ADR 0006).
+    setup_code: str | None = Field(default=None, pattern=r"^[1-9]{4}$", repr=False)
 
 
 class SetupStatusResponse(BaseModel):
     setup_required: bool
+    # "none": any LAN client may create the first admin; "led": it needs the
+    # code the device's LED blinks (POST /api/auth/setup/claim).
+    claim: str = "none"
+    window_open: bool = False
+    window_seconds_left: int = 0
+
+
+class SetupClaimResponse(BaseModel):
+    digits: int
+    expires_in: int
 
 
 class SetPermissionRequest(BaseModel):

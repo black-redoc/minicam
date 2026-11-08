@@ -53,6 +53,9 @@ done
 [ ! -e "$mnt/etc/minicam/tunnel.env" ] || fail "a tunnel token is in the image"
 [ -f "$units/minicam.service.d/image.conf" ] || fail "the image.conf drop-in is missing"
 [ -f "$mnt/etc/avahi/services/minicam.service" ] || fail "the Avahi service file is missing"
+grep -q "<type>_minicam._tcp</type>" "$mnt/etc/avahi/services/minicam.service" ||
+    fail "the Avahi service file does not advertise _minicam._tcp"
+[ -f "$mnt/etc/udev/rules.d/90-minicam-led.rules" ] || fail "the LED udev rule is missing"
 cmp -s "$units/minicam.service" "$app/deploy/minicam.service" ||
     fail "minicam.service differs from deploy/minicam.service"
 
