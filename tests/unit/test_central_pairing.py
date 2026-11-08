@@ -16,7 +16,12 @@ from app import state
 from app.db.connection import apply_migrations
 from app.security_settings import get_security_settings
 from app.services import central as central_module
-from app.services.central import CentralRuntime, PairingError, redeem_pairing_code
+from app.services.central import (
+    CentralRuntime,
+    PairedSite,
+    PairingError,
+    redeem_pairing_code,
+)
 from app.services.central_config import (
     CentralSettings,
     normalize_central_url,
@@ -24,6 +29,7 @@ from app.services.central_config import (
     remove_central_file,
     write_central_file,
 )
+from tests.unit.test_tunnel_service import AUD, TEAM, make_token
 
 URL = "https://admin.example.com"
 
@@ -205,3 +211,62 @@ async def test_runtime_starts_restarts_and_stops_the_loops(
     finally:
         await runtime.stop()
         await conn.close()
+
+
+def _tunnel_body(**overrides: object) -> dict[str, object]:
+    tunnel: dict[str, object] = {
+        "tunnel_token": make_token(),
+        "hostname": "cam.example.com",
+        "team_domain": TEAM,
+        "aud": AUD,
+    }
+    tunnel.update(overrides)
+    return tunnel
+
+
+async def _redeem_with(tunnel: object) -> PairedSite:
+    body = {
+        "token": "mcd_new",
+        "site": {"name": "Casa", "hostname": "cam.example.com"},
+        "tunnel": tunnel,
+    }
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, json=body))
+    async with _client(transport) as http:
+        return await redeem_pairing_code(http, URL, "ABCD-EFGH")
+
+
+async def test_redeem_pairing_code_reads_the_tunnel() -> None:
+    body = _tunnel_body()
+    paired = await _redeem_with(body)
+
+    assert paired.tunnel is not None and not paired.tunnel_invalid
+    assert paired.tunnel.token == body["tunnel_token"]
+    assert paired.tunnel.access.hostname == "cam.example.com"
+    assert str(body["tunnel_token"]) not in repr(paired)
+
+    without = await _redeem_with(None)
+    assert without.tunnel is None and not without.tunnel_invalid
+
+
+@pytest.mark.parametrize(
+    "tunnel",
+    [
+        "not an object",
+        _tunnel_body(tunnel_token="bm90IGEgdG9rZW4="),
+        _tunnel_body(hostname="localhost"),
+        _tunnel_body(team_domain="https://evil.example.com"),
+        _tunnel_body(aud="short"),
+        _tunnel_body(aud=None),
+    ],
+)
+async def test_redeem_pairing_code_flags_an_invalid_tunnel(tunnel: object) -> None:
+    paired = await _redeem_with(tunnel)
+    assert paired.tunnel is None and paired.tunnel_invalid
+    assert paired.device_token == "mcd_new"
+
+
+async def test_redeem_pairing_code_tunnel_unavailable() -> None:
+    response = httpx.Response(503, json={"error": "tunnel_unavailable"})
+    async with _client(httpx.MockTransport(lambda _: response)) as http:
+        with pytest.raises(PairingError, match="the code still works"):
+            await redeem_pairing_code(http, URL, "ABCD-EFGH")

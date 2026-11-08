@@ -8,6 +8,9 @@ starts the entitlement sync and usage reports without a restart.
 
 MINICAM_CENTRAL_URL / MINICAM_DEVICE_TOKEN in .env still win: an install
 configured there is never changed from the app.
+
+With remote access provisioning on (minicam-admin ADR 0012), the same answer
+carries the site's tunnel settings, which minicam installs (ADR 0010).
 """
 
 from __future__ import annotations
@@ -28,6 +31,13 @@ from app.services.entitlements import (
     EntitlementSyncService,
     run_sync_loop,
 )
+from app.services.tunnel import (
+    AccessSettings,
+    is_valid_aud,
+    is_valid_hostname,
+    is_valid_team_domain,
+    is_valid_tunnel_token,
+)
 from app.services.usage import UsageClient, UsageMeter, UsageService, run_usage_loop
 
 logger = logging.getLogger(__name__)
@@ -42,10 +52,49 @@ class PairingError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class CentralTunnel:
+    """The site's tunnel from the dashboard, already validated like
+    POST /api/system/tunnel input (ADR 0008)."""
+
+    token: str = field(repr=False)
+    access: AccessSettings
+
+
+@dataclass(frozen=True, slots=True)
 class PairedSite:
     name: str
     hostname: str
     device_token: str = field(repr=False)
+    tunnel: CentralTunnel | None = None
+    # The dashboard sent tunnel settings that failed validation: the pairing
+    # still holds, the tunnel is not installed.
+    tunnel_invalid: bool = False
+
+
+def parse_central_tunnel(raw: object) -> CentralTunnel | None:
+    """The pair answer's `tunnel`, or None when it is invalid."""
+    if not isinstance(raw, dict):
+        return None
+    token, hostname = raw.get("tunnel_token"), raw.get("hostname")
+    team_domain, aud = raw.get("team_domain"), raw.get("aud")
+    if not (
+        isinstance(token, str)
+        and isinstance(hostname, str)
+        and isinstance(team_domain, str)
+        and isinstance(aud, str)
+    ):
+        return None
+    if not (
+        is_valid_tunnel_token(token)
+        and is_valid_hostname(hostname)
+        and is_valid_team_domain(team_domain)
+        and is_valid_aud(aud)
+    ):
+        return None
+    return CentralTunnel(
+        token=token,
+        access=AccessSettings(hostname=hostname, team_domain=team_domain, aud=aud),
+    )
 
 
 async def redeem_pairing_code(
@@ -63,6 +112,11 @@ async def redeem_pairing_code(
             "The dashboard did not accept the code. Codes work once and for "
             "10 minutes: show a new one with Pair device."
         )
+    if response.status_code == 503:
+        raise PairingError(
+            "The dashboard could not read this site's remote access right now. "
+            "Try again: the code still works."
+        )
     if response.status_code != 200 or len(response.content) > MAX_PAIR_RESPONSE_BYTES:
         raise PairingError(f"The dashboard answered {response.status_code}")
     try:
@@ -73,7 +127,15 @@ async def redeem_pairing_code(
         raise PairingError("The dashboard sent an unexpected answer") from exc
     if not all(isinstance(v, str) and v for v in (token, name, hostname)):
         raise PairingError("The dashboard sent an unexpected answer")
-    return PairedSite(name=name, hostname=hostname, device_token=token)
+    raw_tunnel = data.get("tunnel")
+    tunnel = parse_central_tunnel(raw_tunnel) if raw_tunnel is not None else None
+    return PairedSite(
+        name=name,
+        hostname=hostname,
+        device_token=token,
+        tunnel=tunnel,
+        tunnel_invalid=raw_tunnel is not None and tunnel is None,
+    )
 
 
 class CentralRuntime:

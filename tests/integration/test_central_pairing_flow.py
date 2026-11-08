@@ -119,6 +119,7 @@ async def test_pairing_stores_the_token_and_starts_syncing(
         "source": None,
         "last_synced_at": None,
         "site": None,
+        "tunnel": None,
     }
 
     with caplog.at_level(logging.DEBUG):
@@ -131,6 +132,7 @@ async def test_pairing_stores_the_token_and_starts_syncing(
         "source": "app",
         "last_synced_at": None,
         "site": {"name": "Casa", "hostname": "cam.example.com"},
+        "tunnel": None,
     }
     assert redeemer.calls == [(URL, "abcd-efgh")]
     assert read_central_file() == CentralSettings(URL, "mcd_secret_token")

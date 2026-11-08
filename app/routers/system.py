@@ -1,5 +1,6 @@
-"""Device setup endpoints for minicam-mobile: Cloudflare Tunnel (ADR 0008) and
-the central dashboard connection (ADR 0009).
+"""Device setup endpoints for minicam-mobile: Cloudflare Tunnel (ADR 0008),
+the central dashboard connection (ADR 0009) and the tunnel the dashboard hands
+over when pairing (ADR 0010).
 
 Admins only, and only from the LAN: they decide how the device is reached and
 who may use it from WAN, so they are never changed through the tunnel.
@@ -25,6 +26,7 @@ from app.dependencies import (
 from app.models.central import (
     CentralPairRequest,
     CentralStatusResponse,
+    CentralTunnelResponse,
     PairedSiteResponse,
 )
 from app.models.domain import User
@@ -47,6 +49,26 @@ router = APIRouter(prefix="/api/system", tags=["system"])
 
 _LAN_ONLY_MESSAGE = "Remote access can only be set up from the local network"
 _UNAVAILABLE_MESSAGE = "This installation has no tunnel helper"
+_CENTRAL_TUNNEL_MESSAGE = (
+    "Remote access is managed by the central dashboard; disconnect from it first"
+)
+_ENV_ACCESS_MESSAGE = (
+    "This device's Cloudflare Access settings are in its .env file; "
+    "the dashboard's remote access was not installed"
+)
+_INVALID_TUNNEL_MESSAGE = "The dashboard sent remote access settings that are not valid"
+
+
+def _env_access_configured() -> bool:
+    return bool(
+        os.environ.get("MINICAM_CF_ACCESS_TEAM_DOMAIN")
+        or os.environ.get("MINICAM_CF_ACCESS_AUD")
+    )
+
+
+def _not_central(tunnel_service: TunnelService) -> None:
+    if tunnel_service.managed_by_central:
+        raise HTTPException(status.HTTP_409_CONFLICT, _CENTRAL_TUNNEL_MESSAGE)
 
 
 def _lan_admin(
@@ -84,6 +106,7 @@ async def tunnel_status(
         state=current.state,
         hostname=current.hostname,
         message=current.message,
+        source=current.source,
     )
 
 
@@ -93,6 +116,7 @@ async def set_up_tunnel(
     user: User = Depends(_lan_admin),
     tunnel_service: TunnelService = Depends(_helper),
 ) -> Response:
+    _not_central(tunnel_service)
     access = AccessSettings(
         hostname=body.hostname, team_domain=body.team_domain, aud=body.aud
     )
@@ -107,6 +131,7 @@ async def remove_tunnel(
     user: User = Depends(_lan_admin),
     tunnel_service: TunnelService = Depends(_helper),
 ) -> Response:
+    _not_central(tunnel_service)
     tunnel_service.request_removal()
     _reload_access_settings()
     logger.info("Tunnel removal requested by user %d", user.id)
@@ -139,6 +164,7 @@ def _central_source() -> str | None:
 async def _central_status(
     sync_repository: EntitlementSyncRepository,
     site: PairedSiteResponse | None = None,
+    tunnel: CentralTunnelResponse | None = None,
 ) -> CentralStatusResponse:
     settings = get_security_settings()
     connected = settings.central_mode
@@ -148,6 +174,46 @@ async def _central_status(
         source=_central_source() if connected else None,
         last_synced_at=await sync_repository.last_synced_at() if connected else None,
         site=site,
+        tunnel=tunnel,
+    )
+
+
+def _install_central_tunnel(
+    paired: PairedSite, tunnel_service: TunnelService, user: User
+) -> CentralTunnelResponse | None:
+    """Install the tunnel from the pair answer with the app's path (ADR 0008),
+    marked as the dashboard's. The pairing itself already holds."""
+    if paired.tunnel_invalid:
+        logger.warning("The dashboard sent invalid remote access settings")
+        return CentralTunnelResponse(
+            state="error", hostname=None, message=_INVALID_TUNNEL_MESSAGE
+        )
+    tunnel = paired.tunnel
+    if tunnel is None:
+        return None
+    hostname = tunnel.access.hostname
+    if _env_access_configured():
+        return CentralTunnelResponse(
+            state="skipped", hostname=hostname, message=_ENV_ACCESS_MESSAGE
+        )
+    if not tunnel_service.available:
+        return CentralTunnelResponse(
+            state="error", hostname=hostname, message=_UNAVAILABLE_MESSAGE
+        )
+    current = tunnel_service.settings()
+    replaced = (
+        current is not None and current.access is not None and current.source == "app"
+    )
+    tunnel_service.request_setup(tunnel.token, tunnel.access, source="central")
+    _reload_access_settings()
+    logger.info(
+        "Tunnel setup for %s from the dashboard requested by user %d%s",
+        hostname,
+        user.id,
+        " (replaces the app's tunnel)" if replaced else "",
+    )
+    return CentralTunnelResponse(
+        state="installing", hostname=hostname, message=None, replaced=replaced
     )
 
 
@@ -169,9 +235,11 @@ async def pair_with_central(
     sync_repository: EntitlementSyncRepository = Depends(
         get_entitlement_sync_repository
     ),
+    tunnel_service: TunnelService = Depends(get_tunnel_service),
 ) -> CentralStatusResponse:
     """Exchange the dashboard's pairing code for this device's token, store
-    it and start syncing, without a restart. Pairing again rotates the token."""
+    it and start syncing, without a restart. Pairing again rotates the token.
+    A tunnel in the answer is installed too (ADR 0010)."""
     if _central_source() == "env":
         raise HTTPException(status.HTTP_409_CONFLICT, _ENV_CONFIGURED_MESSAGE)
     runtime = state.central_runtime
@@ -193,7 +261,8 @@ async def pair_with_central(
         user.id,
     )
     site = PairedSiteResponse(name=paired.name, hostname=paired.hostname)
-    return await _central_status(sync_repository, site)
+    tunnel = _install_central_tunnel(paired, tunnel_service, user)
+    return await _central_status(sync_repository, site, tunnel)
 
 
 @router.delete("/central", response_model=CentralStatusResponse)
@@ -202,14 +271,20 @@ async def unpair_from_central(
     sync_repository: EntitlementSyncRepository = Depends(
         get_entitlement_sync_repository
     ),
+    tunnel_service: TunnelService = Depends(get_tunnel_service),
 ) -> CentralStatusResponse:
     """Stop syncing and forget the dashboard; WAN access is managed on the
-    device again (the Admin page's WAN checkboxes unlock)."""
+    device again (the Admin page's WAN checkboxes unlock). The dashboard's
+    tunnel is removed too; one the app set up stays (ADR 0010)."""
     if _central_source() == "env":
         raise HTTPException(status.HTTP_409_CONFLICT, _ENV_CONFIGURED_MESSAGE)
     if state.central_runtime is not None:
         await state.central_runtime.stop()
     remove_central_file()
     get_security_settings.cache_clear()
+    if tunnel_service.managed_by_central and tunnel_service.available:
+        tunnel_service.request_removal()
+        _reload_access_settings()
+        logger.info("Tunnel removal from unpairing requested by user %d", user.id)
     logger.info("Unpaired from the dashboard by user %d", user.id)
     return await _central_status(sync_repository)

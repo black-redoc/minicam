@@ -18,8 +18,11 @@ Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unle
 | `POST` | `/api/auth/setup/claim` | none (LAN, LED claim, setup window) | Blink a setup code on the device's LED |
 | `POST` | `/api/auth/setup` | none (LAN, only while no user exists; LED code with the LED claim) | Create the first admin and sign in |
 | `GET` | `/api/system/central` | admin (LAN) | Central dashboard connection: `connected`, `url`, `source` (`env`/`app`), `last_synced_at` |
-| `POST` | `/api/system/central` | admin (LAN) | Pair with the dashboard: `{url, pairing_code}`; `409` when set in `.env` |
-| `DELETE` | `/api/system/central` | admin (LAN) | Disconnect from the dashboard (app-paired only) |
+| `POST` | `/api/system/central` | admin (LAN) | Pair with the dashboard: `{url, pairing_code}`; `409` when set in `.env`; installs the dashboard's tunnel when it sends one (`tunnel` in the answer, [Cloudflare](/doc/cloudflare)) |
+| `DELETE` | `/api/system/central` | admin (LAN) | Disconnect from the dashboard (app-paired only); removes the dashboard's tunnel |
+| `GET` | `/api/system/tunnel` | admin (LAN) | Tunnel state, hostname, helper message and `source` (`app`/`central`) |
+| `POST` | `/api/system/tunnel` | admin (LAN) | Set up the tunnel from the app; `409` while the dashboard's tunnel is in place |
+| `DELETE` | `/api/system/tunnel` | admin (LAN) | Remove the app's tunnel; `409` while the dashboard's tunnel is in place |
 | `POST` | `/api/auth/logout` | session (optional) | Revoke session, clear cookie |
 | `GET` | `/api/auth/me` | session | Current user |
 | `POST` | `/api/auth/users` | admin | Create a user |
