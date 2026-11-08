@@ -111,26 +111,71 @@ Each [release](https://github.com/black-redoc/minicam/releases) ships
 `minicam-vX.Y.Z-raspios-trixie-arm64.img.xz`: Raspberry Pi OS Lite (64-bit)
 with minicam already installed as a systemd service, for Raspberry Pi 4 and 5.
 
-1. Flash it with Raspberry Pi Imager from the release's Imager repository, so
-   Imager offers OS customisation (user, Wi-Fi, SSH, hostname) as with the
-   stock image: App Options → Content Repository → custom URL
-   `https://github.com/black-redoc/minicam/releases/latest/download/minicam-imager.json`,
-   then pick "minicam" as the OS. ("Use custom" with the downloaded `.img.xz`,
-   checked with `sha256sum --check`, also works, but Imager disables
-   customisation for local files.)
-2. Connect the Pi to your router with an Ethernet cable and power it on.
-3. On first boot the Pi creates its own `/opt/minicam/.env` with a new
-   `MINICAM_JWT_SECRET` (none is shipped in the image) and, unless you chose a
-   hostname in Imager, renames itself `minicam-XXXX` (the last four hex digits
-   of its MAC address).
-4. Open `http://minicam-XXXX.local:8080` from a device on the same LAN and
-   create the admin account (see [First login](#first-login)).
+#### 1. Flash the SD card
+
+Use Raspberry Pi Imager with this repository's Imager catalog, so Imager offers
+OS customisation (user, Wi-Fi, SSH, hostname) as with the stock image. The
+catalog always points at the latest release:
+
+```
+https://github.com/black-redoc/minicam/releases/latest/download/minicam-imager.json
+```
+
+Quit Imager, then open it with the catalog. On macOS:
+
+```bash
+open -a "Raspberry Pi Imager" --args --repo https://github.com/black-redoc/minicam/releases/latest/download/minicam-imager.json
+# if Imager starts without it:
+"/Applications/Raspberry Pi Imager.app/Contents/MacOS/rpi-imager" --repo https://github.com/black-redoc/minicam/releases/latest/download/minicam-imager.json
+```
+
+On Linux and Windows pass the same `--repo <url>` to `rpi-imager`. From the
+Imager window instead: **App Options** (Spanish UI: **Añadir opciones**) →
+**Content Repository** (**Repositorio de contenidos**) → **Edit** → **Use custom
+URL**, paste the URL, **Apply & Restart**.
+
+Then pick your Pi (4 or 5), **minicam vX.Y.Z** as the OS and the SD card. In
+the customisation, turn on **SSH** with a user and password: the app does the
+whole setup, but SSH is the way in if something needs fixing. ("Use custom"
+with the downloaded `.img.xz`, checked against its `.sha256`, also works, but
+Imager disables customisation for local files.)
+
+#### 2. First boot
+
+Connect the Pi to your router with an Ethernet cable and power it on. On first
+boot it creates its own `/opt/minicam/.env` with a new `MINICAM_JWT_SECRET`
+(none is shipped in the image) and, unless you chose a hostname in Imager,
+renames itself `minicam-XXXX` (the last four hex digits of its MAC address).
+After 2-3 minutes it answers at `http://minicam-XXXX.local:8080` and is
+announced on the LAN as `_minicam._tcp`.
+
+#### 3. Set it up from minicam-mobile
+
+Everything else is done from the [minicam-mobile](https://github.com/black-redoc/minicam-mobile)
+app, with the phone on the same network as the Pi:
+
+1. **Admin account** (within 30 minutes of power-on; power-cycle the Pi to
+   reopen it): on the login screen, **Find minicam on my network**, pick the
+   device, **Blink a code on the device**, then type the 4 digits the green LED
+   blinks (N blinks per digit, a longer pause between digits), your email and a
+   password. The web page at `/login` offers the same.
+2. **Cameras**: ⋮ → Camera settings (ONVIF discovery included).
+3. **Remote access** (optional): ⋮ → Remote access, with a Cloudflare API token;
+   the app creates the tunnel, DNS record and Access application, and the Pi
+   installs `cloudflared` itself ([Cloudflare](app/docs/cloudflare.md#setup-from-the-mobile-app)).
+4. **Central dashboard** (optional): in minicam-admin's Sites, **Pair device**
+   shows a one-time code; in the app, ⋮ → Central dashboard, enter the
+   dashboard's address and the code. The Pi fetches its own device token
+   ([Central mode](app/docs/auth.md#central-mode)).
 
 minicam lives in `/opt/minicam` and runs as the `minicam` system user with the
 same sandboxed unit as below (`deploy/minicam.service` plus the
-`minicam.service.d/image.conf` drop-in). To set the remaining values
-(Cloudflare, central dashboard), edit `/opt/minicam/.env` as root and run
-`sudo systemctl restart minicam`.
+`minicam.service.d/image.conf` drop-in). Values set by hand in
+`/opt/minicam/.env` (as root, then `sudo systemctl restart minicam`) take
+precedence over the app.
+
+Updating minicam on a flashed Pi is not automated yet: flash the new release,
+or copy the new release's code over `/opt/minicam` over SSH.
 
 ### Manual install
 
