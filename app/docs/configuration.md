@@ -116,6 +116,8 @@ Unlike camera config, the security layer (sessions, stream tokens, WAN access) i
 | `MINICAM_CF_ACCESS_AUD` | required for WAN | — | Audience (AUD) tag of the Cloudflare Access application protecting this tunnel hostname. Leave empty without a tunnel; the `.env.example` placeholder stops the app from starting. |
 | `MINICAM_CENTRAL_URL` | no | — | HTTPS URL of the central dashboard (minicam-admin). Set it together with `MINICAM_DEVICE_TOKEN` to have WAN access managed there; see [WAN Access Gate](/doc/auth). One without the other, or a non-HTTPS URL, stops the app from starting. |
 | `MINICAM_DEVICE_TOKEN` | with `MINICAM_CENTRAL_URL` | — | This site's device token from the dashboard (shown once when issued or rotated). Secret: never logged. |
+| `MINICAM_SETUP_CLAIM` | no | `none` | `led` requires the code blinked by the device's LED to create the first admin (set by the Raspberry Pi OS image). See [Bootstrapping](/doc/auth#bootstrapping). Any other value stops the app from starting. |
+| `MINICAM_SETUP_LED_PATH` | no | `/sys/class/leds/ACT` | sysfs LED used by the LED claim. |
 | `MINICAM_VAPID_SUBJECT` | no | `mailto:minicam@example.com` | VAPID contact (`mailto:` or `https:` URL) sent with every Web Push. Set your own address. See [Detection Notifications](/doc/notifications). |
 | `MINICAM_MODEL_CATALOG_URL` | no | latest [minicam-models](https://github.com/black-redoc/minicam-models) release `manifest.json` | Manifest the AI Detection model catalog lists and installs from. Point it at a tagged release to pin model versions. See [Object Detection](/doc/detection). |
 

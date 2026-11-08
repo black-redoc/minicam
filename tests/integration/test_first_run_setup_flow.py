@@ -16,7 +16,7 @@ _OWNER = {"email": "owner@example.com", "password": "owner-password"}
 async def test_first_run_creates_admin_then_only_login_is_offered(
     client: TestClient,
 ) -> None:
-    assert client.get("/api/auth/setup").json() == {"setup_required": True}
+    assert client.get("/api/auth/setup").json()["setup_required"] is True
     assert 'id="setup-form"' in client.get("/login").text
 
     res = client.post("/api/auth/setup", json=_OWNER)
@@ -26,7 +26,7 @@ async def test_first_run_creates_admin_then_only_login_is_offered(
     assert me.status_code == 200
     assert me.json()["email"] == _OWNER["email"]
 
-    assert client.get("/api/auth/setup").json() == {"setup_required": False}
+    assert client.get("/api/auth/setup").json()["setup_required"] is False
     page = client.get("/login").text
     assert 'id="login-form"' in page
     assert 'id="setup-form"' not in page
@@ -57,4 +57,4 @@ async def test_setup_is_refused_from_wan(app: FastAPI, client: TestClient) -> No
     res = client.post("/api/auth/setup", json=_OWNER)
 
     assert res.status_code == 403
-    assert client.get("/api/auth/setup").json() == {"setup_required": True}
+    assert client.get("/api/auth/setup").json()["setup_required"] is True

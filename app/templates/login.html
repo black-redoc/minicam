@@ -47,6 +47,28 @@
                               focus:ring-sky-500">
             </div>
 
+            {% if led_claim %}
+            <div class="flex flex-col gap-2">
+                <p class="text-xs text-slate-400">
+                    To prove you are next to the device, ask it for a code: its green
+                    LED blinks 4 digits (count the blinks of each digit; a longer pause
+                    separates digits, an even longer one starts again).
+                </p>
+                <button type="button" id="claim-button"
+                        class="border border-slate-700 hover:border-sky-500 text-slate-100
+                               text-sm rounded-lg py-2 transition-colors">
+                    Blink a code on the device
+                </button>
+                <p id="claim-status" class="hidden text-xs text-slate-400" role="status"></p>
+                <label for="setup-code" class="text-xs text-slate-400">Code from the LED</label>
+                <input id="setup-code" name="setup-code" inputmode="numeric" required
+                       pattern="[1-9]{4}" maxlength="4" autocomplete="one-time-code"
+                       class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
+                              text-sm text-slate-100 tracking-widest focus:outline-none
+                              focus:ring-2 focus:ring-sky-500">
+            </div>
+            {% endif %}
+
             <p id="setup-error" class="hidden text-xs text-red-400" role="alert"></p>
 
             <button type="submit"
@@ -96,13 +118,46 @@
     }
 
     async function postCredentials(url) {
+        const body = {
+            email: document.getElementById('email').value,
+            password: document.getElementById('password').value,
+        };
+        const code = document.getElementById('setup-code');
+        if (code) body.setup_code = code.value.trim();
         return fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                email: document.getElementById('email').value,
-                password: document.getElementById('password').value,
-            }),
+            body: JSON.stringify(body),
+        });
+    }
+
+    async function detailOf(res) {
+        try {
+            const data = await res.json();
+            return typeof data.detail === 'string' ? data.detail : null;
+        } catch {
+            return null;
+        }
+    }
+
+    const claimButton = document.getElementById('claim-button');
+    if (claimButton) {
+        claimButton.addEventListener('click', async () => {
+            const statusEl = document.getElementById('claim-status');
+            const errorEl = document.getElementById('setup-error');
+            errorEl.classList.add('hidden');
+            claimButton.disabled = true;
+            const res = await fetch('/api/auth/setup/claim', { method: 'POST' });
+            claimButton.disabled = false;
+            if (res.ok) {
+                const { expires_in: expiresIn } = await res.json();
+                statusEl.textContent =
+                    `The LED is blinking your code. It is valid for ${Math.round(expiresIn / 60)} minutes.`;
+                statusEl.classList.remove('hidden');
+                document.getElementById('setup-code').focus();
+                return;
+            }
+            showError(errorEl, (await detailOf(res)) || 'Could not ask the device for a code.');
         });
     }
 
@@ -146,7 +201,10 @@
                 return;
             }
             if (res.status === 403) {
-                showError(errorEl, 'Setup is only available from the local network.');
+                showError(
+                    errorEl,
+                    (await detailOf(res)) || 'Setup is only available from the local network.',
+                );
                 return;
             }
             showError(errorEl, 'Could not create the account. Check the email and password.');

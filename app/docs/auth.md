@@ -157,13 +157,26 @@ With `MINICAM_CENTRAL_URL` and `MINICAM_DEVICE_TOKEN` set (see [Configuration](/
 While the `users` table is empty, `/login` shows a **Create admin account** form instead of the sign-in form. Submitting it creates the first account as an admin and signs it in; from then on `/login` only ever shows the normal sign-in form.
 
 ```
-GET  /api/auth/setup   -> { "setup_required": true | false }
-POST /api/auth/setup   { "email": "...", "password": "..." }   (password min. 8 chars)
+GET  /api/auth/setup        -> { "setup_required": true | false, "claim": "none" | "led",
+                                 "window_open": true | false, "window_seconds_left": 1799 }
+POST /api/auth/setup/claim  -> { "digits": 4, "expires_in": 300 }   (LED claim only)
+POST /api/auth/setup        { "email": "...", "password": "...", "setup_code": "2468" }
+                            (password min. 8 chars; setup_code only with the LED claim)
 ```
 
 - `201` — admin created, session cookie set (same cookie as `/api/auth/login`).
 - `409` — any account already exists. Setup can succeed only once: the emptiness check and the insert are a single atomic SQL statement (`SQLiteUserRepository.create_first_admin`), so two concurrent requests can't both win.
 - `403` — the request was classified as WAN. First-run setup is LAN-only so an unconfigured device can't be claimed by whoever reaches it first through the Cloudflare tunnel.
+
+### LED claim (Raspberry Pi OS image)
+
+With `MINICAM_SETUP_CLAIM=led` (set on first boot by the image) being on the LAN is not enough: whoever creates the admin must also be able to see the device. The device advertises itself on the LAN as `_minicam._tcp` (mDNS/DNS-SD, so the apps find it without an IP), and:
+
+- Setup is open for **30 minutes after minicam starts**, and only while no user exists; restarting the device (power cycle) opens it again. `window_open` is always `false` for WAN requests.
+- `POST /api/auth/setup/claim` (LAN) makes the green ACT LED blink a 4-digit code, each digit 1–9: N short blinks per digit, a longer pause between digits and an even longer one before it repeats. The code is valid for 5 minutes and never appears in a response or a log. At most one new code every 30 s (`429`) and 5 per window (`403`); `503` if the LED can't be controlled.
+- `POST /api/auth/setup` then needs `setup_code`. A missing, expired or wrong code is `403`; after 3 wrong codes the code is spent and a new one must be requested. On success the LED goes back to its usual activity.
+
+The LED is written through `/sys/class/leds/ACT/{trigger,brightness}` (`MINICAM_SETUP_LED_PATH` to change the LED); the image's udev rule gives the `minicam` group write access to only those two files.
 
 The new admin starts with **no camera permissions** (camera access is deny-by-default for admins too), so the next step is granting yourself **View** and **PTZ** in `/admin` — see [Grant yourself camera permissions](/doc/configuration#grant-yourself-camera-permissions).
 

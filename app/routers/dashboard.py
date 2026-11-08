@@ -5,12 +5,14 @@ from fastapi.templating import Jinja2Templates
 from app.dependencies import (
     get_authorization_service,
     get_optional_current_user,
+    get_setup_claim_service,
     get_user_repository,
     require_admin,
 )
 from app.models.domain import User
 from app.repositories.user_repository import UserRepository
 from app.services.authorization import AuthorizationService
+from app.services.setup_claim import ClaimMode, SetupClaimService
 from app.settings import get_config
 
 router = APIRouter(tags=["dashboard"])
@@ -21,6 +23,7 @@ templates = Jinja2Templates(directory="app/templates")
 async def login_page(
     request: Request,
     user_repository: UserRepository = Depends(get_user_repository),
+    claim_service: SetupClaimService = Depends(get_setup_claim_service),
 ) -> HTMLResponse:
     """Serve the login form, or the first-admin form while no user exists.
 
@@ -31,7 +34,10 @@ async def login_page(
     return templates.TemplateResponse(
         request=request,
         name="login.html",
-        context={"setup_required": setup_required},
+        context={
+            "setup_required": setup_required,
+            "led_claim": claim_service.mode is ClaimMode.LED,
+        },
     )
 
 

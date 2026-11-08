@@ -525,13 +525,15 @@ class TestSetupStatus:
 
         res = client.get("/api/auth/setup")
         assert res.status_code == 200
-        assert res.json() == {"setup_required": expected}
+        assert res.json()["setup_required"] is expected
+        assert res.json()["claim"] == "none"
 
 
 class TestCompleteSetup:
     def _wire(self, app: FastAPI, created: User | None) -> AsyncMock:
         user_repository = AsyncMock()
         user_repository.create_first_admin.return_value = created
+        user_repository.count_users.return_value = 0
         password_hasher = MagicMock()
         password_hasher.hash.return_value = "hashed"
         token_service = MagicMock()
