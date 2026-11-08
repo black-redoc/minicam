@@ -17,6 +17,9 @@ Complete reference for all HTTP and WebSocket endpoints exposed by minicam. Unle
 | `GET` | `/api/auth/setup` | none | Whether first-run setup is pending |
 | `POST` | `/api/auth/setup/claim` | none (LAN, LED claim, setup window) | Blink a setup code on the device's LED |
 | `POST` | `/api/auth/setup` | none (LAN, only while no user exists; LED code with the LED claim) | Create the first admin and sign in |
+| `GET` | `/api/system/central` | admin (LAN) | Central dashboard connection: `connected`, `url`, `source` (`env`/`app`), `last_synced_at` |
+| `POST` | `/api/system/central` | admin (LAN) | Pair with the dashboard: `{url, pairing_code}`; `409` when set in `.env` |
+| `DELETE` | `/api/system/central` | admin (LAN) | Disconnect from the dashboard (app-paired only) |
 | `POST` | `/api/auth/logout` | session (optional) | Revoke session, clear cookie |
 | `GET` | `/api/auth/me` | session | Current user |
 | `POST` | `/api/auth/users` | admin | Create a user |

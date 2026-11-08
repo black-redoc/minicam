@@ -34,7 +34,7 @@ uid=$(chroot "$mnt" id -u minicam 2>/dev/null || true)
 [ "$(chroot "$mnt" getent passwd minicam | cut -d: -f7)" = /usr/sbin/nologin ] ||
     fail "minicam has a login shell"
 
-for state in .env config.toml minicam.db tunnel.json .tunnel/request.json; do
+for state in .env config.toml minicam.db tunnel.json central.json .tunnel/request.json; do
     [ ! -e "$app/$state" ] || fail "/opt/minicam/$state is in the image"
 done
 

@@ -37,3 +37,16 @@ def isolated_tunnel_dir(
     tunnel_dir = tmp_path_factory.mktemp("tunnel")
     monkeypatch.setenv("MINICAM_TUNNEL_DIR", str(tunnel_dir))
     return tunnel_dir
+
+
+@pytest.fixture(autouse=True)
+def isolated_central_dir(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Keep central.json (app/services/central_config.py) out of the checkout.
+
+    A central.json in the checkout would put every test in central mode.
+    """
+    central_dir = tmp_path_factory.mktemp("central")
+    monkeypatch.setenv("MINICAM_CENTRAL_DIR", str(central_dir))
+    return central_dir
