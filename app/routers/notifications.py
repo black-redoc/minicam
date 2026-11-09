@@ -1,4 +1,4 @@
-"""Detection notifications: settings, live SSE feed and Web Push opt-in."""
+"""Detection notifications: settings, live SSE feed, Web Push and mobile push opt-in."""
 
 from __future__ import annotations
 
@@ -15,21 +15,36 @@ from app.dependencies import (
     enforce_wan_access_gate,
     get_authorization_service,
     get_current_user,
+    get_mobile_push_relay,
+    get_mobile_push_token_repository,
     get_push_subscription_repository,
+    get_session_jti,
     require_admin,
 )
 from app.models.config import (
+    MobilePushStatusResponse,
+    MobilePushTokenRequest,
+    MobilePushUnregisterRequest,
     NotificationConfig,
     PushSubscriptionRequest,
     PushUnsubscribeRequest,
     VapidPublicKeyResponse,
 )
 from app.models.domain import User
+from app.repositories.mobile_push_token_repository import MobilePushTokenRepository
 from app.repositories.push_subscription_repository import PushSubscriptionRepository
 from app.services.authorization import AuthorizationService
 from app.services.config_writer import update_notification_config
 from app.services.notifications import runtime as notification_runtime
 from app.services.notifications.events import EventHub
+from app.services.notifications.mobile_push import (
+    InvalidMobileTokenError,
+    MobilePushRelay,
+    RelayError,
+    validate_key,
+    validate_platform,
+    validate_token,
+)
 from app.services.notifications.web_push import (
     InvalidSubscriptionError,
     WebPushSender,
@@ -171,6 +186,71 @@ async def unsubscribe_push(
 ) -> Response:
     """Stop Web Push for this browser. Idempotent."""
     await repository.delete(user.id, body.endpoint)
+    return Response(status_code=204)
+
+
+def _require_mobile_relay(relay: MobilePushRelay | None) -> MobilePushRelay:
+    if relay is None:
+        raise HTTPException(503, "Mobile push needs the central dashboard")
+    return relay
+
+
+@router.get(
+    "/api/notifications/mobile/status",
+    response_model=MobilePushStatusResponse,
+    dependencies=[Depends(get_current_user)],
+)
+async def mobile_push_status(
+    relay: MobilePushRelay | None = Depends(get_mobile_push_relay),
+) -> MobilePushStatusResponse:
+    """Whether this device can push to the apps: paired and FCM set up at the relay."""
+    return MobilePushStatusResponse(
+        available=relay is not None and await relay.available()
+    )
+
+
+@router.post(
+    "/api/notifications/mobile/tokens",
+    status_code=201,
+    dependencies=[Depends(enforce_wan_access_gate)],
+)
+async def register_mobile_token(
+    body: MobilePushTokenRequest,
+    user: User = Depends(get_current_user),
+    session_jti: str = Depends(get_session_jti),
+    relay: MobilePushRelay | None = Depends(get_mobile_push_relay),
+    repository: MobilePushTokenRepository = Depends(get_mobile_push_token_repository),
+) -> dict[str, str]:
+    """Register this phone for detection pushes (ADR 0011). The relay learns the
+    token first, so a stored token is always one the relay can reach."""
+    try:
+        validate_platform(body.platform)
+        validate_token(body.token)
+        validate_key(body.key)
+    except InvalidMobileTokenError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    try:
+        await _require_mobile_relay(relay).register(
+            user.email, body.platform, body.token
+        )
+    except RelayError as exc:
+        raise HTTPException(
+            502, "The central dashboard did not accept the phone"
+        ) from exc
+    await repository.upsert(user.id, session_jti, body.platform, body.token, body.key)
+    return {"status": "ok"}
+
+
+@router.delete("/api/notifications/mobile/tokens", status_code=204)
+async def unregister_mobile_token(
+    body: MobilePushUnregisterRequest,
+    user: User = Depends(get_current_user),
+    relay: MobilePushRelay | None = Depends(get_mobile_push_relay),
+    repository: MobilePushTokenRepository = Depends(get_mobile_push_token_repository),
+) -> Response:
+    """Stop pushes to this phone. Idempotent; the relay is told best-effort."""
+    if await repository.delete(user.id, body.token) and relay is not None:
+        await relay.unregister(body.token)
     return Response(status_code=204)
 
 

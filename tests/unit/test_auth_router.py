@@ -15,6 +15,8 @@ from app.dependencies import (
     get_current_user,
     get_db_connection,
     get_login_rate_limiter,
+    get_mobile_push_relay,
+    get_mobile_push_token_repository,
     get_network_zone,
     get_password_hasher,
     get_permission_repository,
@@ -61,6 +63,12 @@ def app() -> FastAPI:
     # inert connection so unrelated repos never hit the real DB singleton.
     test_app.dependency_overrides[get_db_connection] = lambda: MagicMock()
     test_app.dependency_overrides[get_network_zone] = lambda: NetworkZone.LAN
+    mobile_tokens = AsyncMock()
+    mobile_tokens.delete_for_session.return_value = []
+    test_app.dependency_overrides[get_mobile_push_token_repository] = lambda: (
+        mobile_tokens
+    )
+    test_app.dependency_overrides[get_mobile_push_relay] = lambda: None
     return test_app
 
 
@@ -239,6 +247,29 @@ class TestLogout:
         res = client.post("/api/auth/logout")
         assert res.status_code == 200
         session_repository.revoke.assert_called_once_with("jti-1")
+
+    def test_logout_drops_session_mobile_tokens(self, app: FastAPI) -> None:
+        token_service = MagicMock()
+        token_service.verify.return_value = SessionTokenPayload(user_id=1, jti="jti-1")
+        mobile_tokens = AsyncMock()
+        mobile_tokens.delete_for_session.return_value = ["phone-a", "phone-b"]
+        relay = AsyncMock()
+        app.dependency_overrides[get_token_service] = lambda: token_service
+        app.dependency_overrides[get_session_repository] = lambda: AsyncMock()
+        app.dependency_overrides[get_mobile_push_token_repository] = lambda: (
+            mobile_tokens
+        )
+        app.dependency_overrides[get_mobile_push_relay] = lambda: relay
+        client = TestClient(app)
+        client.cookies.set("minicam_session", "some-token")
+
+        res = client.post("/api/auth/logout")
+        assert res.status_code == 200
+        mobile_tokens.delete_for_session.assert_awaited_once_with("jti-1")
+        assert [c.args for c in relay.unregister.await_args_list] == [
+            ("phone-a",),
+            ("phone-b",),
+        ]
 
     def test_is_idempotent_with_no_cookie(self, app: FastAPI) -> None:
         client = TestClient(app)

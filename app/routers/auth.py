@@ -7,12 +7,23 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Cookie,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 
 from app.dependencies import (
     SESSION_COOKIE_NAME,
     get_current_user,
     get_login_rate_limiter,
+    get_mobile_push_relay,
+    get_mobile_push_token_repository,
     get_network_zone,
     get_password_hasher,
     get_permission_repository,
@@ -36,6 +47,7 @@ from app.models.auth import (
     WanAccessPublic,
 )
 from app.models.domain import User
+from app.repositories.mobile_push_token_repository import MobilePushTokenRepository
 from app.repositories.permission_repository import PermissionRepository
 from app.repositories.session_repository import SessionRepository
 from app.repositories.user_repository import UserRepository
@@ -44,6 +56,7 @@ from app.security_settings import SecuritySettings, get_security_settings
 from app.services.auth import InvalidSessionTokenError, PasswordHasher, TokenService
 from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.network import NetworkZone
+from app.services.notifications.mobile_push import MobilePushRelay
 from app.services.setup_claim import (
     CODE_DIGITS,
     ClaimError,
@@ -252,11 +265,17 @@ async def _open_session(
 @router.post("/logout")
 async def logout(
     response: Response,
+    background: BackgroundTasks,
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
     token_service: TokenService = Depends(get_token_service),
     session_repository: SessionRepository = Depends(get_session_repository),
+    mobile_tokens: MobilePushTokenRepository = Depends(
+        get_mobile_push_token_repository
+    ),
+    relay: MobilePushRelay | None = Depends(get_mobile_push_relay),
 ) -> dict[str, str]:
-    """Revoke the current session (if any) and clear the cookie. Idempotent."""
+    """Revoke the current session (if any) and clear the cookie. Idempotent.
+    Phones this session registered stop getting pushes (ADR 0011)."""
     if session_token is not None:
         try:
             payload = token_service.verify(session_token)
@@ -264,6 +283,11 @@ async def logout(
             payload = None
         if payload is not None:
             await session_repository.revoke(payload.jti)
+            dropped = await mobile_tokens.delete_for_session(payload.jti)
+            if relay is not None:
+                # After the response: logging out never waits on the dashboard.
+                for token in dropped:
+                    background.add_task(relay.unregister, token)
 
     response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
     return {"status": "ok"}

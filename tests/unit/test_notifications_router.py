@@ -18,7 +18,10 @@ from app.dependencies import (
     enforce_wan_access_gate,
     get_authorization_service,
     get_current_user,
+    get_mobile_push_relay,
+    get_mobile_push_token_repository,
     get_push_subscription_repository,
+    get_session_jti,
     require_admin,
 )
 from app.models.config import AppConfig, NotificationConfig
@@ -26,6 +29,7 @@ from app.models.domain import User
 from app.routers import notifications as notifications_router
 from app.services.config_writer import load_config
 from app.services.notifications.events import DetectionEvent, EventHub
+from app.services.notifications.mobile_push import RelayError
 from app.services.notifications.web_push import b64url_encode
 
 _USER = User(
@@ -72,7 +76,32 @@ def sender() -> MagicMock:
 
 
 @pytest.fixture
-def app(repository: MagicMock, sender: MagicMock) -> FastAPI:
+def mobile_tokens() -> AsyncMock:
+    repo = AsyncMock()
+    repo.delete.return_value = True
+    return repo
+
+
+@pytest.fixture
+def relay() -> AsyncMock:
+    mock = AsyncMock()
+    mock.available.return_value = True
+    return mock
+
+
+@pytest.fixture
+def relay_holder(relay: AsyncMock) -> list[AsyncMock | None]:
+    """The relay the app sees; a test sets [None] for an unpaired device."""
+    return [relay]
+
+
+@pytest.fixture
+def app(
+    repository: MagicMock,
+    sender: MagicMock,
+    mobile_tokens: AsyncMock,
+    relay_holder: list[AsyncMock | None],
+) -> FastAPI:
     test_app = FastAPI()
     test_app.include_router(notifications_router.router)
     test_app.dependency_overrides[get_current_user] = lambda: _USER
@@ -80,6 +109,11 @@ def app(repository: MagicMock, sender: MagicMock) -> FastAPI:
     test_app.dependency_overrides[enforce_wan_access_gate] = lambda: None
     test_app.dependency_overrides[get_push_subscription_repository] = lambda: repository
     test_app.dependency_overrides[notifications_router.get_push_sender] = lambda: sender
+    test_app.dependency_overrides[get_session_jti] = lambda: "jti-1"
+    test_app.dependency_overrides[get_mobile_push_token_repository] = lambda: (
+        mobile_tokens
+    )
+    test_app.dependency_overrides[get_mobile_push_relay] = lambda: relay_holder[0]
     return test_app
 
 
@@ -300,3 +334,102 @@ def test_service_worker_is_served_from_root(client: TestClient) -> None:
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("text/javascript")
     assert "showNotification" in res.text
+
+
+_MOBILE_KEY = b64url_encode(bytes(32))
+_MOBILE = {"platform": "android", "token": "fcm-token-1", "key": _MOBILE_KEY}
+
+
+class TestMobilePush:
+    def test_mobile_tokens_register(
+        self, client: TestClient, mobile_tokens: AsyncMock, relay: AsyncMock
+    ) -> None:
+        res = client.post("/api/notifications/mobile/tokens", json=_MOBILE)
+        assert res.status_code == 201
+        relay.register.assert_awaited_once_with(
+            "user@example.com", "android", "fcm-token-1"
+        )
+        mobile_tokens.upsert.assert_awaited_once_with(
+            7, "jti-1", "android", "fcm-token-1", _MOBILE_KEY
+        )
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {**_MOBILE, "platform": "ios"},
+            {**_MOBILE, "token": "has space"},
+            {**_MOBILE, "key": b64url_encode(b"short")},
+            {"platform": "android", "token": "t"},
+        ],
+    )
+    def test_mobile_tokens_reject_bad_input(
+        self,
+        client: TestClient,
+        mobile_tokens: AsyncMock,
+        relay: AsyncMock,
+        body: dict[str, str],
+    ) -> None:
+        res = client.post("/api/notifications/mobile/tokens", json=body)
+        assert res.status_code in (400, 422)
+        relay.register.assert_not_awaited()
+        mobile_tokens.upsert.assert_not_awaited()
+
+    def test_mobile_tokens_need_the_relay(
+        self,
+        client: TestClient,
+        mobile_tokens: AsyncMock,
+        relay: AsyncMock,
+        relay_holder: list[AsyncMock | None],
+    ) -> None:
+        relay.register.side_effect = RelayError("HTTP 503")
+        res = client.post("/api/notifications/mobile/tokens", json=_MOBILE)
+        assert res.status_code == 502
+        relay_holder[0] = None
+        res = client.post("/api/notifications/mobile/tokens", json=_MOBILE)
+        assert res.status_code == 503
+        mobile_tokens.upsert.assert_not_awaited()
+
+    def test_mobile_tokens_unregister(
+        self,
+        client: TestClient,
+        mobile_tokens: AsyncMock,
+        relay: AsyncMock,
+        relay_holder: list[AsyncMock | None],
+    ) -> None:
+        res = client.request(
+            "DELETE", "/api/notifications/mobile/tokens", json={"token": "fcm-token-1"}
+        )
+        assert res.status_code == 204
+        mobile_tokens.delete.assert_awaited_once_with(7, "fcm-token-1")
+        relay.unregister.assert_awaited_once_with("fcm-token-1")
+
+        # Not this user's (or already gone): nothing to tell the relay.
+        mobile_tokens.delete.return_value = False
+        client.request(
+            "DELETE", "/api/notifications/mobile/tokens", json={"token": "other"}
+        )
+        relay.unregister.assert_awaited_once()
+        relay_holder[0] = None
+        mobile_tokens.delete.return_value = True
+        res = client.request(
+            "DELETE", "/api/notifications/mobile/tokens", json={"token": "x"}
+        )
+        assert res.status_code == 204
+
+    def test_mobile_status(
+        self,
+        client: TestClient,
+        relay: AsyncMock,
+        relay_holder: list[AsyncMock | None],
+    ) -> None:
+        assert client.get("/api/notifications/mobile/status").json() == {
+            "available": True
+        }
+        relay.available.return_value = False
+        assert client.get("/api/notifications/mobile/status").json() == {
+            "available": False
+        }
+        relay_holder[0] = None
+        assert client.get("/api/notifications/mobile/status").json() == {
+            "available": False
+        }
