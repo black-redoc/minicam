@@ -30,6 +30,18 @@ class PairedSiteResponse(BaseModel):
     hostname: str
 
 
+class CentralTunnelResponse(BaseModel):
+    """Remote access from the dashboard's pair answer (ADR 0010). installing:
+    handed to the helper (poll GET /api/system/tunnel); skipped: .env sets the
+    Access settings; error: invalid settings or no tunnel helper."""
+
+    state: Literal["installing", "skipped", "error"]
+    hostname: str | None
+    message: str | None
+    # An app-made tunnel was replaced by the dashboard's.
+    replaced: bool = False
+
+
 class CentralStatusResponse(BaseModel):
     connected: bool
     url: str | None
@@ -37,3 +49,6 @@ class CentralStatusResponse(BaseModel):
     source: Literal["env", "app"] | None
     last_synced_at: str | None
     site: PairedSiteResponse | None = None
+    # Only in the answer to POST: what happened to the dashboard's tunnel, or
+    # None when the dashboard sent none.
+    tunnel: CentralTunnelResponse | None = None

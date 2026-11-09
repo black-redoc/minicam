@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, field_validator
 
 from app.services.tunnel import (
+    TunnelSource,
     TunnelState,
     is_valid_aud,
     is_valid_hostname,
@@ -55,3 +56,5 @@ class TunnelStatusResponse(BaseModel):
     state: TunnelState
     hostname: str | None
     message: str | None
+    # "central": set up by the dashboard (ADR 0010), read-only for the app.
+    source: TunnelSource | None = None

@@ -145,6 +145,7 @@ async def test_tunnel_setup_writes_request_and_applies_access(
         "state": "installing",
         "hostname": "cam.example.com",
         "message": None,
+        "source": "app",
     }
 
 

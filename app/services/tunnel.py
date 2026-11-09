@@ -13,6 +13,10 @@ started by minicam-tunnel.path) acts on, and reads the helper's status file:
     <dir>/.tunnel/status.json    written by the helper: {"state", "message"}
 
 The helper validates the request again: it trusts nothing minicam writes.
+
+The same path installs the tunnel the central dashboard hands over when the
+device is paired (ADR 0010); tunnel.json then records source "central" and the
+app's own setup endpoints leave it alone.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 _DEFAULT_DIR = Path(__file__).resolve().parent.parent.parent
 SETTINGS_FILE = "tunnel.json"
@@ -40,6 +45,8 @@ _TEAM_DOMAIN = re.compile(
 _AUD = re.compile(r"[0-9a-f]{64}")
 _ACCOUNT_ID = re.compile(r"[0-9a-f]{32}")
 _MAX_TOKEN_LENGTH = 2048
+
+TunnelSource = Literal["app", "central"]
 
 
 def tunnel_dir() -> Path:
@@ -104,6 +111,8 @@ class TunnelSettings:
     """
 
     access: AccessSettings | None
+    # Who set it up: the app (ADR 0008) or the central dashboard (ADR 0010).
+    source: TunnelSource = "app"
 
 
 def read_tunnel_settings(directory: Path | None = None) -> TunnelSettings | None:
@@ -121,6 +130,7 @@ def read_tunnel_settings(directory: Path | None = None) -> TunnelSettings | None
         return TunnelSettings(access=None)
     try:
         data = json.loads(raw)
+        source: TunnelSource = "central" if data.get("source") == "central" else "app"
         access = data.get("access")
         if access is None:
             return TunnelSettings(access=None)
@@ -131,7 +141,7 @@ def read_tunnel_settings(directory: Path | None = None) -> TunnelSettings | None
         )
     except ValueError, TypeError, KeyError, AttributeError:
         return TunnelSettings(access=None)
-    return TunnelSettings(access=settings)
+    return TunnelSettings(access=settings, source=source)
 
 
 class TunnelState(StrEnum):
@@ -147,6 +157,8 @@ class TunnelStatus:
     state: TunnelState
     hostname: str | None
     message: str | None
+    # Set while a tunnel is configured (Access settings present).
+    source: TunnelSource | None = None
 
 
 def _write_private(path: Path, content: str) -> None:
@@ -169,12 +181,29 @@ class TunnelService:
         return self._helper_dir.is_dir()
 
     def status(self) -> TunnelStatus:
-        settings = read_tunnel_settings(self._dir)
+        settings = self.settings()
+        configured = settings is not None and settings.access is not None
         hostname = settings.access.hostname if settings and settings.access else None
+        source = settings.source if settings and configured else None
         if (self._helper_dir / REQUEST_FILE).exists():
-            return TunnelStatus(self.available, TunnelState.INSTALLING, hostname, None)
+            return TunnelStatus(
+                self.available, TunnelState.INSTALLING, hostname, None, source
+            )
         state, message = self._helper_status()
-        return TunnelStatus(self.available, state, hostname, message)
+        return TunnelStatus(self.available, state, hostname, message, source)
+
+    def settings(self) -> TunnelSettings | None:
+        return read_tunnel_settings(self._dir)
+
+    @property
+    def managed_by_central(self) -> bool:
+        """A tunnel from the central dashboard is configured (ADR 0010)."""
+        settings = self.settings()
+        return (
+            settings is not None
+            and settings.access is not None
+            and settings.source == "central"
+        )
 
     def _helper_status(self) -> tuple[TunnelState, str | None]:
         try:
@@ -187,7 +216,12 @@ class TunnelService:
             return TunnelState.ERROR, "The tunnel helper's status could not be read"
         return state, message if isinstance(message, str) else None
 
-    def request_setup(self, tunnel_token: str, access: AccessSettings) -> None:
+    def request_setup(
+        self,
+        tunnel_token: str,
+        access: AccessSettings,
+        source: TunnelSource = "app",
+    ) -> None:
         """Store the Access settings, then ask the helper to install the tunnel.
 
         Settings first: by the time cloudflared forwards a request, minicam
@@ -198,7 +232,8 @@ class TunnelService:
                 "hostname": access.hostname,
                 "team_domain": access.team_domain,
                 "aud": access.aud,
-            }
+            },
+            "source": source,
         }
         _write_private(self._dir / SETTINGS_FILE, json.dumps(settings))
         request = {"action": "install", "token": tunnel_token}
