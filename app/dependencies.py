@@ -12,11 +12,16 @@ import jwt
 from fastapi import Cookie, Depends, HTTPException, Request, status
 from starlette.requests import HTTPConnection
 
+from app import state
 from app.db.connection import get_connection
 from app.models.domain import User
 from app.repositories.entitlement_sync_repository import (
     EntitlementSyncRepository,
     SQLiteEntitlementSyncRepository,
+)
+from app.repositories.mobile_push_token_repository import (
+    MobilePushTokenRepository,
+    SQLiteMobilePushTokenRepository,
 )
 from app.repositories.permission_repository import (
     PermissionRepository,
@@ -48,6 +53,7 @@ from app.services.cloudflare_access import (
 )
 from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.network import NetworkZone, classify_network
+from app.services.notifications.mobile_push import MobilePushRelay
 from app.services.setup_claim import ClaimMode, SetupClaimService, SysfsLed
 from app.services.stream_access import StreamAccessService
 from app.services.stream_tokens import StreamTokenService, UsedStreamTokens
@@ -91,6 +97,17 @@ def get_entitlement_sync_repository(
     conn: aiosqlite.Connection = Depends(get_db_connection),
 ) -> EntitlementSyncRepository:
     return SQLiteEntitlementSyncRepository(conn)
+
+
+def get_mobile_push_token_repository(
+    conn: aiosqlite.Connection = Depends(get_db_connection),
+) -> MobilePushTokenRepository:
+    return SQLiteMobilePushTokenRepository(conn)
+
+
+def get_mobile_push_relay() -> MobilePushRelay | None:
+    """The dashboard's push relay, or None when the device is not paired (ADR 0011)."""
+    return state.mobile_push_relay
 
 
 def get_push_subscription_repository(

@@ -48,7 +48,9 @@ def _cooldown_seconds() -> float:
 
 
 hub = EventHub()
-service = NotificationService(hub, connection=get_connection)
+service = NotificationService(
+    hub, connection=get_connection, mobile_relay=lambda: state.mobile_push_relay
+)
 notifier = DetectionNotifier(
     is_enabled=_camera_enabled,
     cooldown_seconds=_cooldown_seconds,

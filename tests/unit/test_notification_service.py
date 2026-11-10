@@ -107,7 +107,7 @@ async def test_push_failure_is_logged_not_raised(
     )
     service.handle(_EVENT)
     await _drain(service)
-    assert "Web Push delivery failed" in caplog.text
+    assert "Push recipients failed" in caplog.text
 
 
 async def test_sender_removed_before_task_runs_skips_push() -> None:

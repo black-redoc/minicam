@@ -31,6 +31,7 @@ from app.services.entitlements import (
     EntitlementSyncService,
     run_sync_loop,
 )
+from app.services.notifications.mobile_push import MobilePushRelay
 from app.services.tunnel import (
     AccessSettings,
     is_valid_aud,
@@ -169,6 +170,9 @@ class CentralRuntime:
             asyncio.create_task(run_sync_loop(sync_service)),
             asyncio.create_task(run_usage_loop(usage_service)),
         ]
+        state.mobile_push_relay = MobilePushRelay(
+            self._http, settings.url, settings.device_token
+        )
         self.url = settings.url
         logger.info("Central mode: syncing WAN entitlements and reporting WAN usage")
 
@@ -179,6 +183,7 @@ class CentralRuntime:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks = []
         state.usage_meter = None
+        state.mobile_push_relay = None
         if self._http is not None:
             await self._http.aclose()
             self._http = None

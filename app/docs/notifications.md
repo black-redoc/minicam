@@ -51,6 +51,15 @@ Browsers only allow Web Push in a secure context: HTTPS (e.g. through the [Cloud
 - Only endpoints on the known browser push services are accepted. minicam never sends requests to arbitrary URLs supplied by a browser.
 - Subscriptions the push service reports as gone (`404`/`410`) are deleted automatically.
 
+### Mobile apps (Android)
+
+The minicam app for Android shows detections as system notifications, even when the app is closed. Each user turns this on per phone in the app. It needs the device to be paired with the central dashboard (**Connect to dashboard**), because the dashboard relays the notifications to Firebase Cloud Messaging: the Firebase key never sits on the device.
+
+- On opt-in the phone creates its own AES-256 key and registers it with its push token. minicam encrypts each notification with that key (AES-256-GCM) before it leaves the device, so neither the dashboard nor Google can read camera names or classes.
+- Recipients are the same as for Web Push: active users with `can_view` on the camera, resolved when each notification is sent.
+- Logging out of the app stops notifications to that phone. Tokens the dashboard reports as gone are deleted automatically.
+- Delivery is best-effort: a notification the dashboard or Firebase can't deliver is not retried.
+
 ## API
 
 | Method | Path | Auth | Description |
@@ -62,8 +71,11 @@ Browsers only allow Web Push in a secure context: HTTPS (e.g. through the [Cloud
 | `POST` | `/api/notifications/push/subscriptions` | session + WAN gate | Register this browser's `PushSubscription` |
 | `DELETE` | `/api/notifications/push/subscriptions` | session | Unregister a subscription (`{"endpoint": ...}`) |
 | `GET` | `/service-worker.js` | none | Service worker that displays pushes |
+| `GET` | `/api/notifications/mobile/status` | session | `{"available": bool}`: paired with the dashboard and push set up there |
+| `POST` | `/api/notifications/mobile/tokens` | session + WAN gate | Register this phone: `{"platform": "android", "token": ..., "key": ...}` (`key`: 32 bytes, base64url) |
+| `DELETE` | `/api/notifications/mobile/tokens` | session | Unregister a phone (`{"token": ...}`) |
 
-Every SSE `detection` event and every push carries the same JSON:
+Every SSE `detection` event and every push carries the same JSON (for the mobile apps, encrypted as `{"v": "1", "iv": ..., "ct": ...}`, base64url, `ct` = ciphertext + tag):
 
 ```json
 {
@@ -78,4 +90,4 @@ Every SSE `detection` event and every push carries the same JSON:
 
 ## Not included yet
 
-Per-camera alarm schedules (e.g. only notify outside business hours), and native APNs/FCM delivery for the future mobile app, will build on this same notification service.
+Per-camera alarm schedules (e.g. only notify outside business hours) and iOS notifications (APNs) will build on this same notification service.

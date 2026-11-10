@@ -183,6 +183,22 @@ class PushUnsubscribeRequest(BaseModel):
     endpoint: str = Field(..., min_length=1, max_length=2048)
 
 
+class MobilePushTokenRequest(BaseModel):
+    """A phone's FCM token and its AES-256 key (base64url), ADR 0011."""
+
+    platform: str = Field(..., min_length=1, max_length=16)
+    token: str = Field(..., min_length=1, max_length=4096)
+    key: str = Field(..., min_length=1, max_length=64)
+
+
+class MobilePushUnregisterRequest(BaseModel):
+    token: str = Field(..., min_length=1, max_length=4096)
+
+
+class MobilePushStatusResponse(BaseModel):
+    available: bool
+
+
 class VapidPublicKeyResponse(BaseModel):
     public_key: str
 
