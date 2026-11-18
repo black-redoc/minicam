@@ -77,11 +77,16 @@ class EncodedPacket:
 
 @dataclass(frozen=True, slots=True)
 class ClipStart:
-    """Where and when a new clip begins."""
+    """Where and when a new clip begins.
+
+    started_monotonic is the time.monotonic() its first packet arrived,
+    to line up detection snapshots with the clip (ADR 0012).
+    """
 
     camera_name: str
     started_at: datetime
     opener: OutputOpener
+    started_monotonic: float | None = None
 
 
 class ClipSink(Protocol):

@@ -25,6 +25,8 @@ class _FakeFrame:
     def __init__(self, sequence: int) -> None:
         self.image = _IMAGE
         self.sequence = sequence
+        self.width = 640
+        self.height = 360
 
 
 class _FakeBuffer:
@@ -164,6 +166,21 @@ class TestDetectionWorkerSnapshotTtl:
         # 3 periods of (2.0s sleep + 0.5s inference), counted from the end.
         assert snapshot is not None
         assert snapshot.expires_at == pytest.approx(100.5 + 3 * 2.5)
+
+    async def test_snapshot_carries_capture_time_and_frame_size(self) -> None:
+        buffer = _FakeBuffer()
+        buffer.set_frame(sequence=1)
+        times = iter([100.0, 100.5])
+        worker = _make_worker(
+            buffer, _FakeBackend(), lambda _: None, clock=lambda: next(times)
+        )
+
+        snapshot = await worker._process_next_frame(asyncio.get_running_loop())
+
+        # Read time of the frame, not the end of inference (ADR 0012).
+        assert snapshot is not None
+        assert snapshot.captured_at == pytest.approx(100.0)
+        assert (snapshot.frame_width, snapshot.frame_height) == (640, 360)
 
 
 class TestDetectionWorkerRun:

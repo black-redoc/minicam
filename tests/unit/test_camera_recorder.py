@@ -113,6 +113,8 @@ def test_clip_start_time_is_the_first_buffered_packet() -> None:
         2026, 10, 22, 11, 59, 57, tzinfo=UTC
     )
     assert factory.sinks[0].start.camera_name == "entrance"
+    # Monotonic time of that first packet, to line up detection boxes.
+    assert factory.sinks[0].start.started_monotonic == 7.0
 
 
 def test_packets_after_start_go_to_the_open_clip_until_the_deadline() -> None:

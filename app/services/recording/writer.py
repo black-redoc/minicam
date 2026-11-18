@@ -44,6 +44,7 @@ class FinishedClip:
     started_at: datetime
     duration_seconds: float
     size_bytes: int
+    started_monotonic: float | None = None
 
 
 def open_output(path: Path, template: VideoStream) -> OutputContainer:
@@ -181,5 +182,6 @@ class ClipWriter:
                 started_at=self._start.started_at,
                 duration_seconds=muxer.duration_seconds,
                 size_bytes=size_bytes,
+                started_monotonic=self._start.started_monotonic,
             )
         )

@@ -6,7 +6,7 @@ import asyncio
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.dependencies import (
     enforce_wan_access_gate,
@@ -26,6 +26,7 @@ from app.models.domain import Recording, User
 from app.repositories.recording_repository import RecordingRepository
 from app.services.authorization import AuthorizationService
 from app.services.config_writer import update_recording_config
+from app.services.recording import detection_track
 from app.services.recording import runtime as recording_runtime
 from app.services.recording.runtime import RecordingService
 from app.services.recording.storage import is_option_available, storage_options
@@ -186,6 +187,32 @@ async def recording_video(
     )
 
 
+@router.get(
+    "/api/recordings/{recording_id}/detections",
+    dependencies=[Depends(enforce_wan_access_gate)],
+)
+async def recording_detections(
+    recording_id: int,
+    user: User = Depends(get_current_user),
+    authorization_service: AuthorizationService = Depends(get_authorization_service),
+    repository: RecordingRepository = Depends(get_recording_repository),
+    service: RecordingService = Depends(get_recording_service),
+) -> JSONResponse:
+    """The clip's detection boxes over time, for players to draw (ADR 0012).
+
+    A clip recorded before boxes were saved has an empty track.
+    """
+    recording = await _get_viewable_recording(
+        recording_id, user, authorization_service, repository
+    )
+    try:
+        path = service.path_for(recording)
+    except ValueError as exc:
+        raise HTTPException(404, "Not found") from exc
+    track = await asyncio.to_thread(detection_track.read_track, path)
+    return JSONResponse(track, headers={"Cache-Control": "private, no-cache"})
+
+
 @router.delete(
     "/api/recordings/{recording_id}",
     status_code=204,
@@ -196,7 +223,7 @@ async def delete_recording(
     repository: RecordingRepository = Depends(get_recording_repository),
     service: RecordingService = Depends(get_recording_service),
 ) -> Response:
-    """Delete a clip and its file."""
+    """Delete a clip, its file and its detection track."""
     recording = await repository.get(recording_id)
     if recording is None:
         raise HTTPException(404, "Not found")
@@ -206,5 +233,6 @@ async def delete_recording(
         pass
     else:
         await asyncio.to_thread(path.unlink, missing_ok=True)
+        await asyncio.to_thread(detection_track.delete_track, path)
     await repository.delete(recording_id)
     return Response(status_code=204)

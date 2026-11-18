@@ -71,6 +71,25 @@ async def test_retention_deletes_oldest_clips_over_the_limit(
     assert sorted(p.name for p in tmp_path.iterdir()) == ["b.mp4", "c.mp4"]
 
 
+async def test_retention_deletes_the_detection_track_with_the_clip(
+    db_connection: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    repository = SQLiteRecordingRepository(db_connection)
+    await _add(repository, tmp_path, "a.mp4", GIB)
+    await _add(repository, tmp_path, "b.mp4", GIB)
+    (tmp_path / "a.detections.json").write_text("{}")
+    (tmp_path / "b.detections.json").write_text("{}")
+
+    await enforce_retention(
+        repository, tmp_path, limit_bytes=GIB, get_free_bytes=lambda: 100 * GIB
+    )
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "b.detections.json",
+        "b.mp4",
+    ]
+
+
 async def test_retention_frees_the_reserve_on_a_full_disk(
     db_connection: aiosqlite.Connection, tmp_path: Path
 ) -> None:

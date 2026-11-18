@@ -144,7 +144,9 @@ class CameraRecorder:
             return
         first = self._gops[0][0]
         started_at = self._now() - timedelta(seconds=now - first.received_at)
-        sink = self._open_clip(ClipStart(self._camera_name, started_at, self._opener))
+        sink = self._open_clip(
+            ClipStart(self._camera_name, started_at, self._opener, first.received_at)
+        )
         self._open_refused = sink is None
         if sink is None:
             return

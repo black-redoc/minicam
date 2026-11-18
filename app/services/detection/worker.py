@@ -39,13 +39,19 @@ class DetectionSnapshot:
 
     expires_at is a time.monotonic() deadline after which the detections
     are too old to draw; it defaults to never so snapshots built outside the
-    worker (tests, fakes) behave as before. Excluded from equality since it
-    is a delivery detail, not part of the detection result.
+    worker (tests, fakes) behave as before. captured_at is the
+    time.monotonic() when the analysed frame was read (None outside the
+    worker), and frame_width/frame_height its size, so recordings can place
+    the boxes on their timeline (ADR 0012). These are excluded from equality
+    since they are delivery details, not part of the detection result.
     """
 
     detections: list[Detection]
     sequence: int
     expires_at: float = field(default=math.inf, compare=False)
+    captured_at: float | None = field(default=None, compare=False)
+    frame_width: int = field(default=0, compare=False)
+    frame_height: int = field(default=0, compare=False)
 
     def is_expired(self, now: float) -> bool:
         return now >= self.expires_at
@@ -121,4 +127,7 @@ class DetectionWorker:
             detections=detections,
             sequence=frame.sequence,
             expires_at=finished_at + ttl,
+            captured_at=started_at,
+            frame_width=frame.width,
+            frame_height=frame.height,
         )

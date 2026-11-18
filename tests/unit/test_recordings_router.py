@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -345,18 +346,60 @@ class TestVideo:
         assert client.get(f"/api/recordings/{recording.id}/video").status_code == 404
 
 
+class TestDetections:
+    def test_serves_the_clip_track(
+        self, client: TestClient, repository: FakeRepository, tmp_path: Path
+    ) -> None:
+        recording = repository.add("entrance", "a.mp4")
+        track = {
+            "version": 1,
+            "width": 640,
+            "height": 360,
+            "frames": [{"t": 1.0, "boxes": []}],
+        }
+        (tmp_path / "a.detections.json").write_text(json.dumps(track))
+
+        res = client.get(f"/api/recordings/{recording.id}/detections")
+
+        assert res.status_code == 200
+        assert res.json() == track
+        assert res.headers["cache-control"] == "private, no-cache"
+
+    def test_a_clip_without_a_track_has_an_empty_one(
+        self, client: TestClient, repository: FakeRepository
+    ) -> None:
+        recording = repository.add("entrance", "a.mp4")
+
+        res = client.get(f"/api/recordings/{recording.id}/detections")
+
+        assert res.status_code == 200
+        assert res.json() == {"version": 1, "width": 0, "height": 0, "frames": []}
+
+    def test_not_viewable_missing_or_invalid_is_404(
+        self, client: TestClient, repository: FakeRepository
+    ) -> None:
+        hidden = repository.add("garage", "a.mp4")
+        invalid = repository.add("entrance", "../config.toml")
+
+        for recording_id in (hidden.id, invalid.id, 99):
+            res = client.get(f"/api/recordings/{recording_id}/detections")
+            assert res.status_code == 404
+
+
 class TestDelete:
     def test_deletes_the_row_and_file(
         self, client: TestClient, repository: FakeRepository, tmp_path: Path
     ) -> None:
         recording = repository.add("entrance", "a.mp4")
         (tmp_path / "a.mp4").write_bytes(b"x")
+        (tmp_path / "a.detections.json").write_text("{}")
 
         res = client.delete(f"/api/recordings/{recording.id}")
 
         assert res.status_code == 204
         assert repository.rows == {}
         assert not (tmp_path / "a.mp4").exists()
+        assert not (tmp_path / "a.detections.json").exists()
 
     def test_deletes_a_row_with_an_invalid_file_name(
         self, client: TestClient, repository: FakeRepository, tmp_path: Path
