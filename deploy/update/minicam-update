@@ -1,0 +1,428 @@
+#!/usr/bin/python3 -I
+"""Root helper that updates minicam to a newer release (ADR 0013).
+
+minicam (unprivileged, sandboxed) writes /opt/minicam/.update/request.json;
+minicam-update.path then starts this script as root through
+minicam-update.service. It accepts exactly one action:
+
+    {"action": "install", "version": "vX.Y.Z"}
+
+and trusts nothing else minicam wrote: it refuses anything but a newer
+release, downloads the bundle and its signature from the one fixed GitHub
+repository, checks the minisign signature against the pinned public key
+(the trusted comment must name that version), swaps the code in
+/opt/minicam while keeping the device's state, and restarts minicam. If
+minicam doesn't come up healthy, the old code and database come back.
+
+Progress goes to /opt/minicam/.update/status.json. Standard library only:
+it runs with the system Python (3.13 on Raspberry Pi OS trixie), not
+minicam's venv, so it must stay valid Python 3.13.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import time
+import tomllib
+import urllib.request
+from collections.abc import Callable, Sequence
+from pathlib import Path
+
+REPOSITORY = "black-redoc/minicam"
+DOWNLOAD_URL = "https://github.com/" + REPOSITORY + "/releases/download/{tag}/{name}"
+APP = "opt/minicam"
+HELPER_DIR = APP + "/.update"
+PUBLIC_KEY = "usr/local/share/minicam/minicam-release.pub"
+WORK_DIR = "var/tmp/minicam-update"
+SERVICE = "minicam.service"
+HEALTH_URL = "http://127.0.0.1:8080/api/health"
+MAX_BUNDLE_BYTES = 1024**3
+HEALTH_TIMEOUT_SECONDS = 180
+_TAG = re.compile(r"v(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,3})")
+
+# The device's own files at the top of /opt/minicam: never replaced. The
+# entries of app/data/ (models, recordings) are kept the same way.
+STATE = frozenset(
+    {
+        ".env",
+        "config.toml",
+        "minicam.db",
+        "minicam.db-wal",
+        "minicam.db-shm",
+        "tunnel.json",
+        "central.json",
+        ".tunnel",
+        ".update",
+    }
+)
+DATABASE_FILES = ("minicam.db", "minicam.db-wal", "minicam.db-shm")
+
+# Files of a release that live outside /opt/minicam, as the image installs
+# them (image/stage-minicam/00-minicam/01-run.sh): (source in the tree,
+# destination, mode).
+SYSTEM_FILES = (
+    ("deploy/minicam.service", "etc/systemd/system/minicam.service", 0o644),
+    (
+        "image/files/image.conf",
+        "etc/systemd/system/minicam.service.d/image.conf",
+        0o644,
+    ),
+    ("deploy/tunnel/minicam-tunnel", "usr/local/sbin/minicam-tunnel", 0o755),
+    (
+        "deploy/tunnel/minicam-tunnel.path",
+        "etc/systemd/system/minicam-tunnel.path",
+        0o644,
+    ),
+    (
+        "deploy/tunnel/minicam-tunnel.service",
+        "etc/systemd/system/minicam-tunnel.service",
+        0o644,
+    ),
+    (
+        "deploy/tunnel/minicam-cloudflared.service",
+        "etc/systemd/system/minicam-cloudflared.service",
+        0o644,
+    ),
+    ("deploy/update/minicam-update", "usr/local/sbin/minicam-update", 0o755),
+    (
+        "deploy/update/minicam-update.path",
+        "etc/systemd/system/minicam-update.path",
+        0o644,
+    ),
+    (
+        "deploy/update/minicam-update.service",
+        "etc/systemd/system/minicam-update.service",
+        0o644,
+    ),
+    ("deploy/update/minicam-release.pub", PUBLIC_KEY, 0o644),
+)
+
+Runner = Callable[[Sequence[str]], str]
+Downloader = Callable[[str, Path], None]
+
+
+class HelperError(Exception):
+    """A failure to report in status.json; str() is shown to the admin."""
+
+
+def parse_tag(tag: object) -> tuple[int, int, int] | None:
+    if not isinstance(tag, str):
+        return None
+    match = _TAG.fullmatch(tag)
+    if match is None:
+        return None
+    return int(match[1]), int(match[2]), int(match[3])
+
+
+def parse_request(raw: str) -> str:
+    """The requested version, or HelperError."""
+    try:
+        request = json.loads(raw)
+    except ValueError:
+        raise HelperError("The request is not valid JSON") from None
+    if (
+        not isinstance(request, dict)
+        or set(request) != {"action", "version"}
+        or request["action"] != "install"
+        or parse_tag(request["version"]) is None
+    ):
+        raise HelperError("Unknown request")
+    return str(request["version"])
+
+
+def bundle_name(tag: str) -> str:
+    return f"minicam-{tag}-linux-arm64.tar.gz"
+
+
+def trusted_comment(tag: str) -> str:
+    return f"minicam {tag} linux-arm64"
+
+
+def read_version(tree: Path) -> str:
+    try:
+        with (tree / "pyproject.toml").open("rb") as f:
+            return "v" + str(tomllib.load(f)["project"]["version"])
+    except (OSError, ValueError, KeyError, TypeError):
+        raise HelperError("Could not read the installed version") from None
+
+
+def run(argv: Sequence[str]) -> str:
+    result = subprocess.run(
+        list(argv),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()[-1:] or [""]
+        raise HelperError(f"{argv[0]} failed: {detail[0]}")
+    return result.stdout
+
+
+def download(url: str, path: Path) -> None:
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "minicam-update"})
+        with urllib.request.urlopen(request, timeout=60) as response, path.open(
+            "wb"
+        ) as out:
+            total = 0
+            while chunk := response.read(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_BUNDLE_BYTES:
+                    raise HelperError("The update is larger than expected")
+                out.write(chunk)
+    except OSError as exc:
+        raise HelperError(f"Could not download {url}: {exc}") from None
+
+
+def is_healthy() -> bool:
+    try:
+        with urllib.request.urlopen(HEALTH_URL, timeout=5) as response:
+            return bool(response.status == 200)
+    except OSError:
+        return False
+
+
+class Helper:
+    def __init__(
+        self,
+        root: Path = Path("/"),
+        runner: Runner = run,
+        downloader: Downloader = download,
+        healthy: Callable[[], bool] = is_healthy,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self.root = root
+        self.app = root / APP
+        self.helper_dir = root / HELPER_DIR
+        self.work = root / WORK_DIR
+        self.next = self.app.with_name("minicam.next")
+        self.prev = self.app.with_name("minicam.prev")
+        self.run = runner
+        self.download = downloader
+        self.healthy = healthy
+        self.sleep = sleep
+        self.clock = clock
+        self.version: str | None = None
+        self.backed_up = False
+
+    def status(self, state: str, message: str | None = None) -> None:
+        path = self.helper_dir / "status.json"
+        tmp = path.with_name("status.json.tmp")
+        tmp.write_text(
+            json.dumps(
+                {
+                    "state": state,
+                    "version": self.version,
+                    "message": message,
+                    "updated_at": self.clock(),
+                }
+            )
+        )
+        tmp.chmod(0o644)
+        os.replace(tmp, path)
+
+    def handle(self) -> None:
+        request_path = self.helper_dir / "request.json"
+        try:
+            raw = request_path.read_text()
+        except FileNotFoundError:
+            return
+        finally:
+            # Always consumed: a bad request must not retrigger the path unit.
+            request_path.unlink(missing_ok=True)
+        try:
+            self.version = parse_request(raw)
+            self.update(self.version)
+        except HelperError as exc:
+            self.status("error", str(exc))
+        except OSError as exc:
+            self.status("error", f"The update failed: {exc}")
+        finally:
+            shutil.rmtree(self.work, ignore_errors=True)
+            shutil.rmtree(self.next, ignore_errors=True)
+
+    def update(self, tag: str) -> None:
+        current = read_version(self.app)
+        new, old = parse_tag(tag), parse_tag(current)
+        if new is None or old is None or new <= old:
+            raise HelperError(f"{tag} is not newer than the installed {current}")
+
+        self.status("downloading", f"Downloading minicam {tag}")
+        bundle, signature = self.fetch(tag)
+        self.status("verifying", "Checking the signature")
+        self.verify(tag, bundle, signature)
+        self.status("installing", f"Unpacking minicam {tag}")
+        self.unpack(tag, bundle)
+
+        self.status("restarting", f"Restarting minicam {tag}")
+        moved: list[str] = []
+        kept: list[str] = []
+        self.backed_up = False
+        try:
+            self.run(["systemctl", "stop", SERVICE])
+            self.backup_database()
+            self.swap(moved, kept)
+            self.install_system_files(self.app)
+            self.start()
+        except (HelperError, OSError) as exc:
+            self.roll_back(moved, kept)
+            raise HelperError(f"{exc}; minicam {current} was restored") from None
+        shutil.rmtree(self.prev, ignore_errors=True)
+        self.status("done", f"minicam {tag} is running")
+
+    def fetch(self, tag: str) -> tuple[Path, Path]:
+        shutil.rmtree(self.work, ignore_errors=True)
+        self.work.mkdir(mode=0o700, parents=True)
+        name = bundle_name(tag)
+        bundle = self.work / name
+        signature = self.work / (name + ".minisig")
+        self.download(DOWNLOAD_URL.format(tag=tag, name=name), bundle)
+        self.download(DOWNLOAD_URL.format(tag=tag, name=name + ".minisig"), signature)
+        return bundle, signature
+
+    def verify(self, tag: str, bundle: Path, signature: Path) -> None:
+        key = self.root / PUBLIC_KEY
+        if not key.is_file():
+            raise HelperError("This device has no release key")
+        # -Q prints only the trusted comment, which the signature covers: it
+        # ties the bundle to this version, so an older signed bundle can't be
+        # passed off as a newer one.
+        comment = self.run(
+            ["minisign", "-V", "-Q", "-p", str(key), "-m", str(bundle), "-x", str(signature)]
+        ).strip()
+        if comment != trusted_comment(tag):
+            raise HelperError("The update's signature is for another version")
+
+    def unpack(self, tag: str, bundle: Path) -> None:
+        shutil.rmtree(self.next, ignore_errors=True)
+        self.next.mkdir(mode=0o755)
+        try:
+            with tarfile.open(bundle, "r:gz") as archive:
+                archive.extractall(self.next, filter="data")
+        except (OSError, tarfile.TarError) as exc:
+            raise HelperError(f"Could not unpack the update: {exc}") from None
+        if read_version(self.next) != tag:
+            raise HelperError("The update contains another version")
+        if not (self.next / ".venv" / "bin" / "uvicorn").is_file():
+            raise HelperError("The update is incomplete")
+        for name in STATE:
+            # Never part of a bundle; drop them if one had any.
+            path = self.next / name
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
+        self.run(["chown", "-R", "minicam:minicam", str(self.next)])
+
+    def backup_database(self) -> None:
+        shutil.rmtree(self.prev, ignore_errors=True)
+        backup = self.prev / "database"
+        backup.mkdir(mode=0o700, parents=True)
+        for name in DATABASE_FILES:
+            source = self.app / name
+            if source.is_file():
+                shutil.copy2(source, backup / name)
+        self.backed_up = True
+
+    def swap(self, moved: list[str], kept: list[str]) -> None:
+        """Move the code to minicam.prev and the new code in, recording in
+        moved and kept (app/data entries carried over) what was done, so a
+        failure halfway can still be rolled back."""
+        new_names = set(os.listdir(self.next))
+        # Code the new release no longer has goes too (minicam.prev is
+        # deleted once the new release runs); state always stays.
+        old_code = {name for name in os.listdir(self.app) if name not in STATE}
+        for name in sorted(new_names | old_code):
+            old = self.app / name
+            moved.append(name)
+            if old.exists() or old.is_symlink():
+                os.rename(old, self.prev / name)
+            if name in new_names:
+                os.rename(self.next / name, old)
+        old_data = self.prev / "app" / "data"
+        new_data = self.app / "app" / "data"
+        if old_data.is_dir():
+            new_data.mkdir(parents=True, exist_ok=True)
+            for name in sorted(os.listdir(old_data)):
+                if not (new_data / name).exists():
+                    kept.append(name)
+                    os.rename(old_data / name, new_data / name)
+
+    def roll_back(self, moved: list[str], kept: list[str]) -> None:
+        self.run_quietly(["systemctl", "stop", SERVICE])
+        new_data = self.app / "app" / "data"
+        old_data = self.prev / "app" / "data"
+        for name in kept:
+            if (new_data / name).exists():
+                os.rename(new_data / name, old_data / name)
+        for name in moved:
+            current = self.app / name
+            if current.is_dir() and not current.is_symlink():
+                shutil.rmtree(current)
+            else:
+                current.unlink(missing_ok=True)
+            previous = self.prev / name
+            if previous.exists() or previous.is_symlink():
+                os.rename(previous, current)
+        # Only once the new code may have touched it (migrations), and only
+        # from a complete backup: never delete a database without one.
+        if moved and self.backed_up:
+            for name in DATABASE_FILES:
+                backup = self.prev / "database" / name
+                target = self.app / name
+                if backup.is_file():
+                    shutil.copy2(backup, target)
+                else:
+                    target.unlink(missing_ok=True)
+        try:
+            self.install_system_files(self.app)
+        except HelperError:
+            pass
+        self.run_quietly(["systemctl", "start", SERVICE])
+
+    def run_quietly(self, argv: Sequence[str]) -> None:
+        try:
+            self.run(argv)
+        except HelperError:
+            pass
+
+    def install_system_files(self, tree: Path) -> None:
+        for source, destination, mode in SYSTEM_FILES:
+            src = tree / source
+            if not src.is_file():
+                continue
+            dst = self.root / destination
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dst.with_name(dst.name + ".tmp")
+            shutil.copyfile(src, tmp)
+            tmp.chmod(mode)
+            os.replace(tmp, dst)
+        self.run(["systemctl", "daemon-reload"])
+
+    def start(self) -> None:
+        self.run(["systemctl", "start", SERVICE])
+        deadline = self.clock() + HEALTH_TIMEOUT_SECONDS
+        while self.clock() < deadline:
+            if self.healthy():
+                return
+            self.sleep(3)
+        raise HelperError("minicam did not start")
+
+
+def main() -> int:
+    Helper().handle()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

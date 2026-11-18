@@ -58,6 +58,7 @@ from app.services.setup_claim import ClaimMode, SetupClaimService, SysfsLed
 from app.services.stream_access import StreamAccessService
 from app.services.stream_tokens import StreamTokenService, UsedStreamTokens
 from app.services.tunnel import TunnelService, tunnel_dir
+from app.services.update import UpdateService, update_dir
 from app.services.wan_access import WanAccessGateService
 
 SESSION_COOKIE_NAME = "minicam_session"
@@ -196,6 +197,11 @@ def get_setup_claim_service() -> SetupClaimService:
 @lru_cache
 def get_tunnel_service() -> TunnelService:
     return TunnelService(tunnel_dir())
+
+
+@lru_cache
+def get_update_service() -> UpdateService:
+    return UpdateService(update_dir())
 
 
 @lru_cache

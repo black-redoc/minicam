@@ -48,7 +48,19 @@ for unit in minicam-tunnel.path minicam-tunnel.service minicam-cloudflared.servi
 	install -m 644 "${tunnel}/${unit}" "${ROOTFS_DIR}/etc/systemd/system/${unit}"
 done
 
+# Updates to newer signed releases from minicam-mobile: root helper started
+# when minicam writes /opt/minicam/.update/request.json, minisign (00-packages)
+# and the pinned release key (ADR 0013).
+update="${app}/deploy/update"
+install -m 755 "${update}/minicam-update" "${ROOTFS_DIR}/usr/local/sbin/minicam-update"
+for unit in minicam-update.path minicam-update.service; do
+	install -m 644 "${update}/${unit}" "${ROOTFS_DIR}/etc/systemd/system/${unit}"
+done
+install -d -m 755 "${ROOTFS_DIR}/usr/local/share/minicam"
+install -m 644 "${update}/minicam-release.pub" "${ROOTFS_DIR}/usr/local/share/minicam/minicam-release.pub"
+
 on_chroot <<'EOF'
 install -d -m 700 -o minicam -g minicam /opt/minicam/.tunnel
-systemctl enable minicam-firstboot.service minicam.service minicam-tunnel.path
+install -d -m 700 -o minicam -g minicam /opt/minicam/.update
+systemctl enable minicam-firstboot.service minicam.service minicam-tunnel.path minicam-update.path
 EOF

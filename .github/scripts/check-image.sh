@@ -34,7 +34,8 @@ uid=$(chroot "$mnt" id -u minicam 2>/dev/null || true)
 [ "$(chroot "$mnt" getent passwd minicam | cut -d: -f7)" = /usr/sbin/nologin ] ||
     fail "minicam has a login shell"
 
-for state in .env config.toml minicam.db tunnel.json central.json .tunnel/request.json; do
+for state in .env config.toml minicam.db tunnel.json central.json .tunnel/request.json \
+    .update/request.json .update/status.json; do
     [ ! -e "$app/$state" ] || fail "/opt/minicam/$state is in the image"
 done
 
@@ -44,13 +45,19 @@ chroot "$mnt" /opt/minicam/.venv/bin/python -c \
     'import av, fastapi, numpy, onnxruntime, uvicorn, wsproto' ||
     fail "the image's .venv cannot import minicam's dependencies"
 
-for unit in minicam.service minicam-firstboot.service minicam-tunnel.path; do
+for unit in minicam.service minicam-firstboot.service minicam-tunnel.path minicam-update.path; do
     [ -L "$units/multi-user.target.wants/$unit" ] || fail "$unit is not enabled"
 done
 [ -x "$mnt/usr/local/sbin/minicam-tunnel" ] || fail "the tunnel helper is missing"
 [ "$(stat -c %u "$app/.tunnel" 2>/dev/null)" = "$uid" ] ||
     fail "/opt/minicam/.tunnel is missing or not owned by minicam"
 [ ! -e "$mnt/etc/minicam/tunnel.env" ] || fail "a tunnel token is in the image"
+[ -x "$mnt/usr/local/sbin/minicam-update" ] || fail "the update helper is missing"
+[ "$(stat -c %u "$app/.update" 2>/dev/null)" = "$uid" ] ||
+    fail "/opt/minicam/.update is missing or not owned by minicam"
+cmp -s "$mnt/usr/local/share/minicam/minicam-release.pub" "$app/deploy/update/minicam-release.pub" ||
+    fail "the release key differs from deploy/update/minicam-release.pub"
+chroot "$mnt" sh -c 'command -v minisign' >/dev/null || fail "minisign is not installed"
 [ -f "$units/minicam.service.d/image.conf" ] || fail "the image.conf drop-in is missing"
 [ -f "$mnt/etc/avahi/services/minicam.service" ] || fail "the Avahi service file is missing"
 grep -q "<type>_minicam._tcp</type>" "$mnt/etc/avahi/services/minicam.service" ||
