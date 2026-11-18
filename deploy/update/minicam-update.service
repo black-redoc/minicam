@@ -1,0 +1,14 @@
+# Root helper that updates minicam to a newer signed release (ADR 0013).
+# Started by minicam-update.path; see /usr/local/sbin/minicam-update.
+[Unit]
+Description=Apply minicam's update request
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/minicam-update
+# Download, unpack and a health check of the restarted minicam.
+TimeoutStartSec=30min
+PrivateTmp=true
+ProtectHome=true

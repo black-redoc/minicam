@@ -71,6 +71,13 @@ jobs:
         # GIT_HASH: git refuses to read the runner-owned checkout as root.
         run: |
           sudo GIT_HASH="$PI_GEN_COMMIT" ./build.sh -c "$GITHUB_WORKSPACE/image/config"
+          # Update bundle (ADR 0013): the image's /opt/minicam (code, .python,
+          # .venv built for this OS), without the helper directories.
+          rootfs=$(sudo find work -maxdepth 3 -type d -path '*/stage-minicam/rootfs' | head -n 1)
+          [ -n "$rootfs" ] || { echo "stage-minicam rootfs not found" >&2; exit 1; }
+          sudo tar -C "$rootfs/opt/minicam" --exclude=./.tunnel --exclude=./.update \
+            --numeric-owner --owner=0 --group=0 \
+            -czf "deploy/minicam-$GITHUB_REF_NAME-linux-arm64.tar.gz" .
           # Each stage keeps a full root filesystem; free the disk for the checks.
           sudo rm -rf work
           # pi-gen ran as root; the next steps write next to its output.
@@ -81,6 +88,23 @@ jobs:
           name=minicam-$GITHUB_REF_NAME-raspios-trixie-arm64
           xz --decompress --keep --stdout "pi-gen/deploy/$name.img.xz" > "$RUNNER_TEMP/$name.img"
           sudo sh .github/scripts/check-image.sh "$RUNNER_TEMP/$name.img"
+
+      - name: Sign update bundle
+        working-directory: pi-gen/deploy
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          [ -n "$MINISIGN_SECRET_KEY" ] || { echo "MINISIGN_SECRET_KEY is not set" >&2; exit 1; }
+          sudo apt-get install -y --no-install-recommends minisign
+          key="$RUNNER_TEMP/minisign.key"
+          (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key")
+          name=minicam-$GITHUB_REF_NAME-linux-arm64.tar.gz
+          # The trusted comment ties the signature to this version (ADR 0013).
+          minisign -S -s "$key" -m "$name" -t "minicam $GITHUB_REF_NAME linux-arm64"
+          rm -f "$key"
+          # Fails here, not on the devices, if the secret and the pinned key differ.
+          comment=$(minisign -V -Q -p "$GITHUB_WORKSPACE/deploy/update/minicam-release.pub" -m "$name")
+          [ "$comment" = "minicam $GITHUB_REF_NAME linux-arm64" ]
 
       - name: Checksum
         working-directory: pi-gen/deploy
@@ -101,7 +125,9 @@ jobs:
             pi-gen/deploy/minicam-${{ github.ref_name }}-raspios-trixie-arm64.img.xz
             pi-gen/deploy/minicam-${{ github.ref_name }}-raspios-trixie-arm64.img.xz.sha256
             pi-gen/deploy/minicam-imager.json
-          # Already xz-compressed.
+            pi-gen/deploy/minicam-${{ github.ref_name }}-linux-arm64.tar.gz
+            pi-gen/deploy/minicam-${{ github.ref_name }}-linux-arm64.tar.gz.minisig
+          # Already compressed.
           compression-level: 0
           retention-days: 7
           if-no-files-found: error
@@ -132,4 +158,6 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes \
               --title "minicam $GITHUB_REF_NAME"
           fi
-          gh release upload "$GITHUB_REF_NAME" "$name" "$name.sha256" minicam-imager.json --clobber
+          bundle=minicam-$GITHUB_REF_NAME-linux-arm64.tar.gz
+          gh release upload "$GITHUB_REF_NAME" "$name" "$name.sha256" minicam-imager.json \
+            "$bundle" "$bundle.minisig" --clobber

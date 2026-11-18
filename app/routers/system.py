@@ -1,6 +1,6 @@
 """Device setup endpoints for minicam-mobile: Cloudflare Tunnel (ADR 0008),
-the central dashboard connection (ADR 0009) and the tunnel the dashboard hands
-over when pairing (ADR 0010).
+the central dashboard connection (ADR 0009), the tunnel the dashboard hands
+over when pairing (ADR 0010) and updates to a newer release (ADR 0013).
 
 Admins only, and only from the LAN: they decide how the device is reached and
 who may use it from WAN, so they are never changed through the tunnel.
@@ -21,6 +21,7 @@ from app.dependencies import (
     get_entitlement_sync_repository,
     get_network_zone,
     get_tunnel_service,
+    get_update_service,
     require_admin,
 )
 from app.models.central import (
@@ -31,6 +32,7 @@ from app.models.central import (
 )
 from app.models.domain import User
 from app.models.tunnel import TunnelSetupRequest, TunnelStatusResponse
+from app.models.update import UpdateRequest, UpdateStatusResponse
 from app.repositories.entitlement_sync_repository import EntitlementSyncRepository
 from app.security_settings import get_security_settings
 from app.services.central import PairedSite, PairingError, redeem_pairing_code
@@ -42,6 +44,7 @@ from app.services.central_config import (
 )
 from app.services.network import NetworkZone
 from app.services.tunnel import AccessSettings, TunnelService
+from app.services.update import UpdateError, UpdateService
 
 logger = logging.getLogger(__name__)
 
@@ -288,3 +291,53 @@ async def unpair_from_central(
         logger.info("Tunnel removal from unpairing requested by user %d", user.id)
     logger.info("Unpaired from the dashboard by user %d", user.id)
     return await _central_status(sync_repository)
+
+
+# ── Updates (ADR 0013) ──────────────────────────────────────────────────
+# Admins only, from the LAN or through the tunnel: an admin away from home
+# can update too, and cloudflared keeps running while minicam restarts.
+
+
+def _update_response(update_service: UpdateService) -> UpdateStatusResponse:
+    current = update_service.status()
+    return UpdateStatusResponse(
+        available=current.available,
+        current=current.current,
+        latest=current.latest,
+        update_available=current.update_available,
+        state=current.state,
+        version=current.version,
+        message=current.message,
+        checked_at=current.checked_at,
+    )
+
+
+@router.get("/update", response_model=UpdateStatusResponse)
+async def update_status(
+    refresh: bool = False,
+    _: User = Depends(require_admin),
+    update_service: UpdateService = Depends(get_update_service),
+) -> UpdateStatusResponse:
+    """This version, the latest release and the progress of an update."""
+    if update_service.available:
+        await update_service.check(refresh=refresh)
+    return _update_response(update_service)
+
+
+@router.post(
+    "/update",
+    response_model=UpdateStatusResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_update(
+    body: UpdateRequest,
+    user: User = Depends(require_admin),
+    update_service: UpdateService = Depends(get_update_service),
+) -> UpdateStatusResponse:
+    """Ask the root helper to install the offered release."""
+    try:
+        update_service.request_install(body.version)
+    except UpdateError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    logger.info("Update to %s requested by user %d", body.version, user.id)
+    return _update_response(update_service)
