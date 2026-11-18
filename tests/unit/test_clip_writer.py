@@ -36,7 +36,9 @@ def _write_clip(
     finished: list[FinishedClip] = []
     path = tmp_path / "clip.mp4"
     with open_source(codec=codec) as (_container, stream):
-        start = ClipStart("entrance", _STARTED_AT, lambda p: open_output(p, stream))
+        start = ClipStart(
+            "entrance", _STARTED_AT, lambda p: open_output(p, stream), 42.0
+        )
         writer = ClipWriter.open(start, path, finished.append)
     assert writer is not None
     for packet in packets:
@@ -72,6 +74,7 @@ def test_writes_a_playable_mp4_from_a_keyframe(tmp_path: Path) -> None:
     assert clip.started_at == _STARTED_AT
     assert clip.size_bytes == path.stat().st_size
     assert clip.duration_seconds == pytest.approx((len(packets) - 1) / FPS)
+    assert clip.started_monotonic == 42.0
 
 
 @pytest.mark.parametrize(("codec", "tag"), [("h264", "avc1"), ("hevc", "hvc1")])

@@ -32,7 +32,8 @@ from app.models.config import RecordingConfig
 from app.models.domain import Recording
 from app.repositories.recording_repository import SQLiteRecordingRepository
 from app.services.detection.worker import DetectionSnapshot
-from app.services.recording import storage
+from app.services.recording import detection_track, storage
+from app.services.recording.detection_track import DetectionTimeline
 from app.services.recording.packets import ClipSink, ClipStart
 from app.services.recording.recorder import PRE_ROLL_SECONDS, CameraRecorder
 from app.services.recording.trigger import RecordingTrigger
@@ -72,6 +73,7 @@ class RecordingService:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._recorders: dict[str, CameraRecorder] = {}
         self._triggers: dict[str, RecordingTrigger] = {}
+        self._timelines: dict[str, DetectionTimeline] = {}
         # Touched from capture threads (writers) and writer threads (pending).
         self._lock = threading.Lock()
         self._writers: list[ClipWriter] = []
@@ -110,11 +112,17 @@ class RecordingService:
         await self.enforce_retention()
 
     def _scan_and_clean(self, known: set[str]) -> set[str]:
-        """Delete unfinished (.part) and unregistered clips; return the rest."""
+        """Delete unfinished (.part) and unregistered clips, and detection
+        tracks without their clip; return the clips kept."""
         self._dir.mkdir(parents=True, exist_ok=True)
         kept: set[str] = set()
         for path in self._dir.iterdir():
             if not path.is_file():
+                continue
+            clip_name = detection_track.clip_name_for_sidecar(path.name)
+            if clip_name is not None:
+                if clip_name not in known:
+                    path.unlink(missing_ok=True)
                 continue
             if path.name.endswith(_CLIP_SUFFIX + PART_SUFFIX) or (
                 path.name.endswith(_CLIP_SUFFIX) and path.name not in known
@@ -155,6 +163,7 @@ class RecordingService:
         """Drop a camera's state (it was deleted or renamed)."""
         self._recorders.pop(camera_name, None)
         self._triggers.pop(camera_name, None)
+        self._timelines.pop(camera_name, None)
 
     def on_snapshot(self, camera_name: str, snapshot: DetectionSnapshot) -> None:
         recorder = self._recorders.get(camera_name)
@@ -162,8 +171,11 @@ class RecordingService:
             return
         enabled = self._config().enabled
         recorder.arm(enabled)
+        timeline = self._timelines.setdefault(camera_name, DetectionTimeline())
         if not enabled:
+            timeline.clear()
             return
+        timeline.add(snapshot)
         trigger = self._triggers.setdefault(camera_name, RecordingTrigger())
         deadline = trigger.on_snapshot(snapshot, self._clock())
         if deadline is not None:
@@ -234,6 +246,7 @@ class RecordingService:
         end = self._clock()
         start = end - clip.duration_seconds - PRE_ROLL_SECONDS - 1.0
         classes = trigger.classes_between(start, end) if trigger is not None else ()
+        await self._save_track(clip)
         try:
             await self._repository().add(
                 camera_name=clip.camera_name,
@@ -246,6 +259,19 @@ class RecordingService:
             await self.enforce_retention()
         except Exception:
             logger.exception("Could not register recording %s", clip.path.name)
+
+    async def _save_track(self, clip: FinishedClip) -> None:
+        """Write the clip's detection boxes next to it (ADR 0012)."""
+        timeline = self._timelines.get(clip.camera_name)
+        if timeline is None or clip.started_monotonic is None:
+            return
+        track = timeline.track(clip.started_monotonic, clip.duration_seconds)
+        try:
+            await asyncio.to_thread(detection_track.write_track, clip.path, track)
+        except OSError as exc:
+            logger.error(
+                "Could not save the detection boxes of %s: %s", clip.path.name, exc
+            )
 
     async def enforce_retention(self) -> int:
         async with self._retention_lock:

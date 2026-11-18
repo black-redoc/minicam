@@ -16,6 +16,7 @@ border color alone identifies the class.
 from __future__ import annotations
 
 import zlib
+from typing import Any
 
 import numpy as np
 
@@ -62,6 +63,20 @@ def color_for_class(class_name: str) -> tuple[int, int, int]:
         return explicit_color
     index = _stable_hash(class_name) % len(_FALLBACK_COLORS)
     return _FALLBACK_COLORS[index]
+
+
+def box_payload(detection: Detection) -> dict[str, Any]:
+    """A detection as clients draw it: the live {"type": "detections"}
+    messages and the recordings' detection tracks share this shape."""
+    return {
+        "label": detection.class_name,
+        "confidence": round(detection.confidence, 2),
+        "color": "#{:02x}{:02x}{:02x}".format(*color_for_class(detection.class_name)),
+        "x1": detection.x1,
+        "y1": detection.y1,
+        "x2": detection.x2,
+        "y2": detection.y2,
+    }
 
 
 def draw_detections(image: np.ndarray, detections: list[Detection]) -> np.ndarray:

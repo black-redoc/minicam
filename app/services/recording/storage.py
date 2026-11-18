@@ -17,6 +17,7 @@ from pathlib import Path
 
 from app.models.config import RECORDING_STORAGE_OPTIONS_GB
 from app.repositories.recording_repository import RecordingRepository
+from app.services.recording.detection_track import delete_track
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +70,9 @@ async def enforce_retention(
         oldest = await repository.oldest()
         if oldest is None:
             break
-        await asyncio.to_thread(
-            (recordings_dir / oldest.file_name).unlink, missing_ok=True
-        )
+        clip_path = recordings_dir / oldest.file_name
+        await asyncio.to_thread(clip_path.unlink, missing_ok=True)
+        await asyncio.to_thread(delete_track, clip_path)
         await repository.delete(oldest.id)
         total -= oldest.size_bytes
         deleted += 1

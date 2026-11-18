@@ -36,7 +36,7 @@ from app.models.frame import Frame
 from app.security_settings import SecuritySettings, get_security_settings
 from app.services.authorization import AuthorizationService
 from app.services.detection.base import Detection
-from app.services.detection.draw import color_for_class, draw_detections
+from app.services.detection.draw import box_payload, draw_detections
 from app.services.encoder import JPEG_QUALITY, WAN_JPEG_QUALITY, encode_jpeg
 from app.services.live.feed import LiveFeed
 from app.services.live.fmp4 import InitSegment
@@ -397,16 +397,5 @@ def _detections_message(camera_name: str) -> dict[str, Any]:
         "type": "detections",
         "width": frame.width if frame is not None else 0,
         "height": frame.height if frame is not None else 0,
-        "boxes": [
-            {
-                "label": d.class_name,
-                "confidence": round(d.confidence, 2),
-                "color": "#{:02x}{:02x}{:02x}".format(*color_for_class(d.class_name)),
-                "x1": d.x1,
-                "y1": d.y1,
-                "x2": d.x2,
-                "y2": d.y2,
-            }
-            for d in detections
-        ],
+        "boxes": [box_payload(d) for d in detections],
     }

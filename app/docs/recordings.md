@@ -37,7 +37,7 @@ Who can see a clip follows the same rules as live view: you need `can_view` on i
 ## How it works (and what it costs)
 
 - Clips are **not re-encoded**. minicam copies the camera's own video packets into the MP4 file (a remux), so recording costs almost no CPU and keeps the camera's full quality. A Raspberry Pi 5 has no hardware video encoder, so re-encoding would compete with live streaming and detection for the CPU.
-- As a consequence, clips **don't show the detection boxes** that the live view draws.
+- As a consequence, the detection boxes are **not drawn into the clip**. minicam saves them next to it instead (`<clip>.detections.json`, a few KB) and players draw them over the video while it plays, as the live view does. The Android app draws them; the web Recordings page and downloaded clips don't show them yet.
 - Clips keep the camera's codec, **H.264 or HEVC (H.265)**, whatever the RTSP URL says: many Hikvision and EZVIZ cameras send HEVC on `/h264/...` paths. HEVC clips play in Safari and in Chrome or Edge on devices with hardware HEVC decoding; other browsers may not play them, but **Download** still works with any player (for example VLC).
 - The pre-roll buffer holds the last few seconds of compressed video per camera, starting at a keyframe. That is a few MB of RAM per camera, and only while recording is on.
 - Each clip is written by its own thread, so a slow SD card never stalls the live stream. If the disk falls more than about 80 seconds of video behind, that clip is abandoned and logged.
@@ -51,7 +51,8 @@ Who can see a clip follows the same rules as live view: you need `can_view` on i
 | `PUT` | `/api/recordings/settings` | admin | Save `{enabled, max_storage_gb}` |
 | `GET` | `/api/recordings?camera=&before=&limit=` | session + WAN gate | Clips of viewable cameras, newest first |
 | `GET` | `/api/recordings/{id}/video[?download=true]` | session + `can_view` + WAN gate | The MP4 clip (supports `Range`) |
-| `DELETE` | `/api/recordings/{id}` | admin | Delete a clip and its file |
+| `GET` | `/api/recordings/{id}/detections` | session + `can_view` + WAN gate | The clip's detection boxes over time (empty for older clips) |
+| `DELETE` | `/api/recordings/{id}` | admin | Delete a clip, its file and its detection boxes |
 
 `GET /api/recordings/settings` returns:
 
@@ -89,3 +90,17 @@ Who can see a clip follows the same rules as live view: you need `can_view` on i
 ```
 
 A clip on a camera you can't view returns `404`, as if it didn't exist.
+
+`GET /api/recordings/{id}/detections` returns the boxes the clip's players draw. `t` is seconds from the start of the clip; each frame replaces the boxes of the one before (an empty `boxes` clears them). Boxes are in frame pixels (`width` x `height`), like the live `{"type": "detections"}` messages:
+
+```json
+{
+  "version": 1,
+  "width": 640,
+  "height": 360,
+  "frames": [
+    {"t": 3.1, "boxes": [{"label": "person", "confidence": 0.87, "color": "#ff0000", "x1": 120, "y1": 40, "x2": 260, "y2": 350}]},
+    {"t": 9.4, "boxes": []}
+  ]
+}
+```

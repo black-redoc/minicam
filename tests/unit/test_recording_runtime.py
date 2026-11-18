@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -105,12 +107,15 @@ async def test_start_removes_unfinished_and_unregistered_clips(
     (directory / "kept.mp4").write_bytes(b"x")
     (directory / "orphan.mp4").write_bytes(b"x")
     (directory / "crashed.mp4.part").write_bytes(b"x")
+    (directory / "kept.detections.json").write_text("{}")
+    (directory / "orphan.detections.json").write_text("{}")
     (directory / "notes.txt").write_bytes(b"x")
     (directory / "subdir").mkdir()
 
     await harness.service.start()
 
     assert sorted(p.name for p in directory.iterdir()) == [
+        "kept.detections.json",
         "kept.mp4",
         "notes.txt",
         "subdir",
@@ -216,6 +221,88 @@ async def test_finished_clip_is_registered_with_its_classes(
     assert recording.duration_seconds == 12.0
     assert recording.size_bytes == 100
     assert recording.classes == ("dog", "person")
+
+
+def _timed(at: float, *classes: str) -> DetectionSnapshot:
+    return DetectionSnapshot(
+        detections=[Detection(c, 0.9, 1, 2, 3, 4) for c in classes],
+        sequence=0,
+        captured_at=at,
+        frame_width=640,
+        frame_height=360,
+    )
+
+
+async def test_finished_clip_saves_its_detection_boxes(
+    harness: Harness, tmp_path: Path
+) -> None:
+    directory = tmp_path / "recordings"
+    await harness.service.start()
+    harness.service.recorder_for("entrance")
+    harness.service.on_snapshot("entrance", _timed(52.0, "person"))
+    harness.service.on_snapshot("entrance", _timed(53.0))
+    clip = dataclasses.replace(_clip(directory), started_monotonic=50.0)
+
+    harness.service._on_clip_finished(clip)
+    await harness.service.shutdown()
+
+    track = json.loads((directory / "a.detections.json").read_text())
+    assert (track["width"], track["height"]) == (640, 360)
+    assert [f["t"] for f in track["frames"]] == [2.0, 3.0]
+    assert track["frames"][0]["boxes"][0]["label"] == "person"
+
+
+async def test_no_boxes_are_kept_while_recording_is_off(
+    harness: Harness, tmp_path: Path
+) -> None:
+    directory = tmp_path / "recordings"
+    await harness.service.start()
+    harness.service.recorder_for("entrance")
+    harness.service.on_snapshot("entrance", _timed(52.0, "person"))
+    harness.config = RecordingConfig(enabled=False, max_storage_gb=1)
+    harness.service.on_snapshot("entrance", _timed(53.0, "person"))
+    clip = dataclasses.replace(_clip(directory), started_monotonic=50.0)
+
+    await harness.service._register(clip)
+
+    assert not (directory / "a.detections.json").exists()
+
+
+async def test_a_clip_without_a_start_time_saves_no_boxes(
+    harness: Harness, tmp_path: Path
+) -> None:
+    directory = tmp_path / "recordings"
+    await harness.service.start()
+    harness.service.recorder_for("entrance")
+    harness.service.on_snapshot("entrance", _timed(52.0, "person"))
+
+    await harness.service._register(_clip(directory))
+
+    assert not (directory / "a.detections.json").exists()
+
+
+async def test_a_failed_track_write_is_logged_and_the_clip_kept(
+    harness: Harness,
+    db_connection: aiosqlite.Connection,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    directory = tmp_path / "recordings"
+    await harness.service.start()
+    harness.service.recorder_for("entrance")
+    harness.service.on_snapshot("entrance", _timed(52.0, "person"))
+    clip = dataclasses.replace(_clip(directory), started_monotonic=50.0)
+
+    with patch.object(
+        recording_runtime.detection_track,
+        "write_track",
+        side_effect=OSError("disk full"),
+    ):
+        await harness.service._register(clip)
+
+    assert "Could not save the detection boxes of a.mp4" in caplog.text
+    repository = SQLiteRecordingRepository(db_connection)
+    assert await repository.list_file_names() == {"a.mp4"}
 
 
 async def test_finished_clip_applies_retention(
